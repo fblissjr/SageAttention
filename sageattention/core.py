@@ -959,3 +959,60 @@ def sageattn_qk_int8_pv_fp8_cuda_sm90(
         return o, lse / 1.44269504 + lse_correction * sm_scale if smooth_k else lse / 1.44269504
     else:
         return o
+
+
+def sageattn_warmup(
+    shapes: List[Tuple[int, int, int, int, int]],
+    *,
+    device: str = "cuda",
+    dtype: torch.dtype = torch.bfloat16,
+    kernels: Tuple[str, ...] = ("sageattn_qk_int8_pv_fp16_triton",),
+    tensor_layout: str = "HND",
+) -> None:
+    """Pre-warm Triton JIT + autotune caches for a list of attention shapes.
+
+    Consumers (e.g. ComfyUI nodes) can call this once at model-patch time
+    to hide the first-call cache-miss latency (~100-500ms per new shape
+    tuple on cold start) from the user's first gen. Silent best-effort:
+    shapes that fail to dispatch on the current build (missing kernel,
+    wrong arch, etc.) are skipped without raising.
+
+    Parameters
+    ----------
+    shapes : list of (batch, heads, seq_q, seq_kv, head_dim) tuples
+        The attention shapes to warm. For LTX-2.3 (head_dim=64, heads=32),
+        pass the canonical self-attn + cross-attn shapes from the workflow.
+
+    kernels : tuple of sage function names to warm
+        Defaults to the Triton kernel -- that's the only one with runtime
+        autotune. CUDA kernels are fully compiled at build time and don't
+        benefit from warmup. If you route masked -> triton and unmasked ->
+        fp8++ (like AudioLoopHelper does), only the triton side needs
+        warming.
+
+    Notes
+    -----
+    - Builds throwaway q/k/v tensors per shape; peak VRAM is bounded by
+      the largest shape passed. For LTX self-attn-large (31776 x 31776)
+      this is ~1.5 GiB transient.
+    - Each dispatch is wrapped in try/except -- warmup is best-effort and
+      failure is silent. Real user calls will surface the same error.
+    - Triton caches results to disk (`~/.triton/cache/`), so the benefit
+      survives process restarts. `./build.sh` invalidates the cache.
+    """
+    import sageattention as _sa
+
+    for kernel_name in kernels:
+        kernel = getattr(_sa, kernel_name, None)
+        if kernel is None:
+            continue
+        for shape in shapes:
+            B, H, Sq, Skv, D = shape
+            try:
+                q = torch.randn(B, H, Sq, D, device=device, dtype=dtype)
+                k = torch.randn(B, H, Skv, D, device=device, dtype=dtype)
+                v = torch.randn(B, H, Skv, D, device=device, dtype=dtype)
+                kernel(q, k, v, is_causal=False, tensor_layout=tensor_layout)
+                del q, k, v
+            except Exception:
+                pass
