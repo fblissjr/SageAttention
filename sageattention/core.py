@@ -49,7 +49,7 @@ from .quant import per_warp_int8 as per_warp_int8_cuda
 from .quant import sub_mean
 from .quant import per_channel_fp8
 
-from typing import Any, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, List, Literal, Optional, Sequence, Tuple, Union
 import warnings
 
 
@@ -966,16 +966,15 @@ def sageattn_warmup(
     *,
     device: str = "cuda",
     dtype: torch.dtype = torch.bfloat16,
-    kernels: Tuple[str, ...] = ("sageattn_qk_int8_pv_fp16_triton",),
-    tensor_layout: str = "HND",
+    kernels: Sequence[Callable] = (sageattn_qk_int8_pv_fp16_triton,),
 ) -> None:
     """Pre-warm Triton JIT + autotune caches for a list of attention shapes.
 
     Consumers (e.g. ComfyUI nodes) can call this once at model-patch time
     to hide the first-call cache-miss latency (~100-500ms per new shape
-    tuple on cold start) from the user's first gen. Silent best-effort:
-    shapes that fail to dispatch on the current build (missing kernel,
-    wrong arch, etc.) are skipped without raising.
+    tuple on cold start) from the user's first gen. Best-effort: shape/
+    kernel combinations that raise a dispatch-shape-related error are
+    logged and skipped; OOMs and unexpected errors propagate.
 
     Parameters
     ----------
@@ -983,36 +982,32 @@ def sageattn_warmup(
         The attention shapes to warm. For LTX-2.3 (head_dim=64, heads=32),
         pass the canonical self-attn + cross-attn shapes from the workflow.
 
-    kernels : tuple of sage function names to warm
+    kernels : sequence of sage kernel callables to warm
         Defaults to the Triton kernel -- that's the only one with runtime
         autotune. CUDA kernels are fully compiled at build time and don't
-        benefit from warmup. If you route masked -> triton and unmasked ->
-        fp8++ (like AudioLoopHelper does), only the triton side needs
-        warming.
+        benefit from warmup. Pass callables directly
+        (e.g. `sageattention.sageattn_qk_int8_pv_fp16_triton`) so typos
+        fail at import time rather than silently at warmup.
 
     Notes
     -----
-    - Builds throwaway q/k/v tensors per shape; peak VRAM is bounded by
-      the largest shape passed. For LTX self-attn-large (31776 x 31776)
-      this is ~1.5 GiB transient.
-    - Each dispatch is wrapped in try/except -- warmup is best-effort and
-      failure is silent. Real user calls will surface the same error.
-    - Triton caches results to disk (`~/.triton/cache/`), so the benefit
+    - Q/K/V tensors are built in HND layout. The Triton kernel's
+      autotune cache keys on shape dimensions (qo_len, kv_len, head_dim,
+      block sizes), not layout, so a single HND warmup covers callers
+      that use either HND or NHD at the same shape.
+    - Triton caches results to disk (~/.triton/cache), so the benefit
       survives process restarts. `./build.sh` invalidates the cache.
     """
-    import sageattention as _sa
-
-    for kernel_name in kernels:
-        kernel = getattr(_sa, kernel_name, None)
-        if kernel is None:
-            continue
-        for shape in shapes:
-            B, H, Sq, Skv, D = shape
+    for shape in shapes:
+        B, H, Sq, Skv, D = shape
+        q = torch.randn(B, H, Sq, D, device=device, dtype=dtype)
+        k = torch.randn(B, H, Skv, D, device=device, dtype=dtype)
+        v = torch.randn(B, H, Skv, D, device=device, dtype=dtype)
+        for kernel in kernels:
             try:
-                q = torch.randn(B, H, Sq, D, device=device, dtype=dtype)
-                k = torch.randn(B, H, Skv, D, device=device, dtype=dtype)
-                v = torch.randn(B, H, Skv, D, device=device, dtype=dtype)
-                kernel(q, k, v, is_causal=False, tensor_layout=tensor_layout)
-                del q, k, v
-            except Exception:
-                pass
+                kernel(q, k, v, is_causal=False, tensor_layout="HND")
+            except (RuntimeError, ValueError, NotImplementedError) as exc:
+                warnings.warn(
+                    f"sageattn_warmup: {getattr(kernel, '__name__', kernel)} "
+                    f"skipped shape {shape}: {type(exc).__name__}: {exc}"
+                )

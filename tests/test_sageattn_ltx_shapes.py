@@ -79,14 +79,21 @@ SHAPES = [
 ]
 
 
+# The two modes whose outputs AudioLoopHelper mixes in one forward pass
+# (triton for masked, fp8++ for unmasked). Used downstream in the cross-kernel
+# consistency check -- any typo in these labels would silently disable that
+# check, so they're pulled out as constants.
+TRITON_LABEL = "fp16_triton"
+FP8PP_LABEL = "fp8_cuda++"
+
 # Each mode: (label, kernel attribute name, extra kwargs). The "auto" entry
 # has kernel=None and is dispatched specially to sageattn().
 MODE_SPECS = [
-    ("fp16_cuda",   "sageattn_qk_int8_pv_fp16_cuda",   {"pv_accum_dtype": "fp32"}),
-    ("fp16_triton", "sageattn_qk_int8_pv_fp16_triton", {}),
-    ("fp8_cuda",    "sageattn_qk_int8_pv_fp8_cuda",    {"pv_accum_dtype": "fp32+fp32"}),
-    ("fp8_cuda++",  "sageattn_qk_int8_pv_fp8_cuda",    {"pv_accum_dtype": "fp32+fp16"}),
-    ("auto",        None,                              {}),
+    ("fp16_cuda",  "sageattn_qk_int8_pv_fp16_cuda",   {"pv_accum_dtype": "fp32"}),
+    (TRITON_LABEL, "sageattn_qk_int8_pv_fp16_triton", {}),
+    ("fp8_cuda",   "sageattn_qk_int8_pv_fp8_cuda",    {"pv_accum_dtype": "fp32+fp32"}),
+    (FP8PP_LABEL,  "sageattn_qk_int8_pv_fp8_cuda",    {"pv_accum_dtype": "fp32+fp16"}),
+    ("auto",       None,                              {}),
 ]
 
 # Torch SDPA backends measured alongside sage. Serves as the "is sage still
@@ -222,21 +229,29 @@ def main():
         print(f"    {'SDPA (math)':<{label_width}}"
               f"  {'-':>10}  {'-':>10}  {'-':>10}  {'-':>10}  {sdpa_ms:>10.2f}  {1.0:>5.2f}x")
 
-        def _print_result(label: str, m: Metrics, warn_rtol: bool = True):
-            marker = "  !" if warn_rtol and m.mean_rtol > 0.10 else ""
+        def _print_row(
+            label: str,
+            mean_r: float, max_r: float, mean_a: float, max_a: float,
+            median_ms: float | None,
+            warn_threshold: float = 0.10,
+            warn: bool = True,
+        ):
+            marker = "  !" if warn and mean_r > warn_threshold else ""
+            ms_cell = f"{median_ms:>10.2f}" if median_ms is not None else f"{'-':>10}"
+            speed_cell = f"{sdpa_ms / median_ms:>5.2f}x" if median_ms is not None else f"{'-':>5} "
             print(
                 f"    {label:<{label_width}}  "
-                f"{m.mean_rtol:>10.3g}  {m.max_rtol:>10.3g}  "
-                f"{m.mean_atol:>10.3g}  {m.max_atol:>10.3g}  "
-                f"{m.median_ms:>10.2f}  {sdpa_ms / m.median_ms:>5.2f}x{marker}"
+                f"{mean_r:>10.3g}  {max_r:>10.3g}  "
+                f"{mean_a:>10.3g}  {max_a:>10.3g}  "
+                f"{ms_cell}  {speed_cell}{marker}"
             )
-            if warn_rtol and m.mean_rtol > 0.10:
-                warnings.append(f"{shape.name} / {label}: mean_rtol={m.mean_rtol:.3g}")
+            if warn and mean_r > warn_threshold:
+                warnings.append(f"{shape.name} / {label}: mean_rtol={mean_r:.3g}")
 
-        # Cache outputs for cross-kernel consistency check below. Only the
-        # two modes the AudioLoopHelper consumer actually mixes in one forward
-        # pass (triton on masked, fp8++ on unmasked). Other outputs are freed
-        # immediately to keep peak VRAM bounded.
+        def _print_result(label: str, m: Metrics, warn_rtol: bool = True):
+            _print_row(label, m.mean_rtol, m.max_rtol, m.mean_atol, m.max_atol,
+                       median_ms=m.median_ms, warn=warn_rtol)
+
         cached_outs: dict[str, torch.Tensor] = {}
         for label, kernel_name, kwargs in MODE_SPECS:
             try:
@@ -246,37 +261,25 @@ def main():
                 print(f"    {label:<{label_width}}  SKIP ({type(exc).__name__}: {str(exc)[:80]})")
                 continue
             _print_result(label, m)
-            if label in ("fp16_triton", "fp8_cuda++"):
+            if label in (TRITON_LABEL, FP8PP_LABEL):
                 cached_outs[label] = out
 
-        # Cross-kernel consistency: when AudioLoopHelper routes masked calls
-        # to triton and unmasked to fp8++ in one forward pass, are those two
-        # kernels numerically consistent enough to mix? Only meaningful on
-        # unmasked shapes (on masked shapes the CUDA path is known-broken,
-        # so divergence is the bug, not a consistency finding).
+        # Cross-kernel consistency: AudioLoopHelper routes masked calls to
+        # triton and unmasked to fp8++ in one forward pass; do those two
+        # kernels agree beyond the noise floor their individual errors
+        # can explain? Unmasked shapes only -- on masked shapes the CUDA
+        # path is known-broken, so divergence is the bug itself.
         #
-        # Noise-floor threshold (0.15): fp16_triton has rtol ~0.04 vs SDPA
-        # and fp8++ has rtol ~0.09 vs SDPA. When their errors combine in
-        # quadrature, cross-kernel rtol ~= sqrt(0.04^2 + 0.09^2) ~= 0.098 --
-        # so ~0.10 is the floor we expect from individual kernel noise
-        # alone. 0.15 gives 50% headroom: only a secondary numerical issue
-        # (beyond each kernel's independent error budget) would breach it.
-        if not shape.has_mask and "fp16_triton" in cached_outs and "fp8_cuda++" in cached_outs:
+        # Threshold 0.15: fp16_triton ~0.04 vs SDPA and fp8++ ~0.09 vs SDPA;
+        # quadrature combination ~= sqrt(0.04^2 + 0.09^2) ~= 0.098 is the
+        # floor. 0.15 leaves 50% headroom so only a secondary numerical
+        # issue (beyond each kernel's independent error budget) breaches it.
+        if not shape.has_mask and TRITON_LABEL in cached_outs and FP8PP_LABEL in cached_outs:
             mean_r, max_r, mean_a, max_a = accuracy_metrics(
-                cached_outs["fp8_cuda++"], cached_outs["fp16_triton"]
+                cached_outs[FP8PP_LABEL], cached_outs[TRITON_LABEL]
             )
-            marker = "  !" if mean_r > 0.15 else ""
-            print(
-                f"    {'fp8++vs.triton':<{label_width}}  "
-                f"{mean_r:>10.3g}  {max_r:>10.3g}  "
-                f"{mean_a:>10.3g}  {max_a:>10.3g}  "
-                f"{'-':>10}  {'-':>5}{marker}"
-            )
-            if mean_r > 0.15:
-                warnings.append(
-                    f"{shape.name} / fp8++ vs triton cross-kernel: mean_rtol={mean_r:.3g} "
-                    "(exceeds combined-noise floor; investigate)"
-                )
+            _print_row("fp8++vs.triton", mean_r, max_r, mean_a, max_a,
+                       median_ms=None, warn_threshold=0.15)
 
         for label, backend in TORCH_MODE_SPECS:
             try:
