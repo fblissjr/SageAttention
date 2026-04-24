@@ -55,6 +55,13 @@ cd /path/to/sage-fork
 
 Build is 60–90s on an 8-core box with MAX_JOBS=8. Longer if you don't cap.
 
+Post-build, run `${VIRTUAL_ENV}/bin/python tests/test_sageattn_ltx_shapes.py`
+once before the first production LTX gen. Side effect: populates
+Triton's on-disk autotune cache for every LTX shape the test
+covers, so ComfyUI's first gen after a rebuild skips the ~100-500ms
+per-new-shape autotune warmup. `./build.sh` invalidates this cache,
+so re-run the test after every rebuild.
+
 ## Testing
 
 Standalone scripts (no pytest). Run against the installed sage in

@@ -103,6 +103,27 @@ synthetic wide-V. No material difference.
 quality improvement from `scale_max=2.25` on the non-++ path. Until
 then, this is closed.
 
+### Session-level attention telemetry summary (AudioLoopHelper side)
+
+Cross-repo backlog item, tracked here because it feeds sage-fork's
+mask-kernel work (the "is triton cross-attn a bottleneck?" trigger
+above). AudioLoopHelper's `nodes_sage.py` already writes a per-call
+JSONL row (shape, mode, effective_mode, elapsed_us, fell_back) when
+`AUDIOLOOPHELPER_SAGE_TRACE` is set. The raw data is there but not
+aggregated -- nobody can currently say "triton cross-attn is X% of
+gen wall time" with numbers, which is exactly what the B2 trigger
+needs.
+
+**Shape of the work (AudioLoopHelper side):** emit a one-line
+summary at gen-end: median/p90 elapsed_us for masked-triton calls,
+total call count, and that median as a % of total gen time if
+measurable. No new telemetry plumbing required -- just aggregation
+over the existing JSONL rows.
+
+**Trigger to act:** when someone on AudioLoopHelper wants to justify
+backing a sage-fork kernel push with data. Until someone asks, the
+raw JSONL is sufficient.
+
 ## [Unreleased]
 
 ### Added
@@ -132,6 +153,14 @@ then, this is closed.
   Conclusion: sage remains load-bearing on sm89; the
   torch-SDPA-could-displace-sage scenario is retired by measurement.
   Companion to the one-shape `tests/test_sageattn.py`.
+  Also reports a `fp8++vs.triton` cross-kernel consistency row on
+  unmasked shapes: the AudioLoopHelper consumer mixes fp8++ (unmasked)
+  and triton (masked) in one forward pass, so measuring their pairwise
+  rtol tells us whether that mixing introduces a secondary numerical
+  issue beyond each kernel's independent noise floor. Measured on RTX
+  4090: mean_rtol ~0.10 across self-attn shapes -- essentially equal
+  to the combined-noise floor (triton ~0.04 + fp8++ ~0.09 vs SDPA,
+  added in quadrature). No hidden discontinuity; mixing is safe.
 - `tests/repros/repro_cuda_mask_kernel.py` -- standalone repro for the
   CUDA mask-path missing-feature documented in Known kernel bugs.
 - `CHANGELOG.md` -- this file.

@@ -18,6 +18,10 @@ The point is to answer:
   * How much accuracy does fp8++ cost vs SDPA on LTX's real shapes?
   * Is cross-attention (with mask) where the loss is concentrated?
   * How much speed does fp16_cuda cost relative to fp8++?
+  * Do fp16_triton and fp8++ agree with each other? (The AudioLoopHelper
+    consumer mixes them in one forward pass -- masked -> triton,
+    unmasked -> fp8++. If they diverge more than their individual noise
+    floors permit, that's a finding worth flagging.)
 
 Run with the venv that has sage installed active:
     ${VIRTUAL_ENV}/bin/python tests/test_sageattn_ltx_shapes.py
@@ -169,11 +173,11 @@ def dispatch_torch(backend: SDPBackend) -> Callable:
 
 def measure_mode(
     mode_fn: Callable, q, k, v, mask, out_ref: torch.Tensor,
-) -> Metrics:
+) -> tuple[Metrics, torch.Tensor]:
     out = mode_fn(q, k, v, mask)
     mean_r, max_r, mean_a, max_a = accuracy_metrics(out, out_ref)
     median_ms = time_median_ms(lambda: mode_fn(q, k, v, mask))
-    return Metrics(mean_r, max_r, mean_a, max_a, median_ms)
+    return Metrics(mean_r, max_r, mean_a, max_a, median_ms), out
 
 
 def print_header(label_width: int):
@@ -229,19 +233,55 @@ def main():
             if warn_rtol and m.mean_rtol > 0.10:
                 warnings.append(f"{shape.name} / {label}: mean_rtol={m.mean_rtol:.3g}")
 
+        # Cache outputs for cross-kernel consistency check below. Only the
+        # two modes the AudioLoopHelper consumer actually mixes in one forward
+        # pass (triton on masked, fp8++ on unmasked). Other outputs are freed
+        # immediately to keep peak VRAM bounded.
+        cached_outs: dict[str, torch.Tensor] = {}
         for label, kernel_name, kwargs in MODE_SPECS:
             try:
                 mode_fn = dispatch_sage(kernel_name, kwargs)
-                m = measure_mode(mode_fn, q, k, v, mask, out_ref)
+                m, out = measure_mode(mode_fn, q, k, v, mask, out_ref)
             except Exception as exc:
                 print(f"    {label:<{label_width}}  SKIP ({type(exc).__name__}: {str(exc)[:80]})")
                 continue
             _print_result(label, m)
+            if label in ("fp16_triton", "fp8_cuda++"):
+                cached_outs[label] = out
+
+        # Cross-kernel consistency: when AudioLoopHelper routes masked calls
+        # to triton and unmasked to fp8++ in one forward pass, are those two
+        # kernels numerically consistent enough to mix? Only meaningful on
+        # unmasked shapes (on masked shapes the CUDA path is known-broken,
+        # so divergence is the bug, not a consistency finding).
+        #
+        # Noise-floor threshold (0.15): fp16_triton has rtol ~0.04 vs SDPA
+        # and fp8++ has rtol ~0.09 vs SDPA. When their errors combine in
+        # quadrature, cross-kernel rtol ~= sqrt(0.04^2 + 0.09^2) ~= 0.098 --
+        # so ~0.10 is the floor we expect from individual kernel noise
+        # alone. 0.15 gives 50% headroom: only a secondary numerical issue
+        # (beyond each kernel's independent error budget) would breach it.
+        if not shape.has_mask and "fp16_triton" in cached_outs and "fp8_cuda++" in cached_outs:
+            mean_r, max_r, mean_a, max_a = accuracy_metrics(
+                cached_outs["fp8_cuda++"], cached_outs["fp16_triton"]
+            )
+            marker = "  !" if mean_r > 0.15 else ""
+            print(
+                f"    {'fp8++vs.triton':<{label_width}}  "
+                f"{mean_r:>10.3g}  {max_r:>10.3g}  "
+                f"{mean_a:>10.3g}  {max_a:>10.3g}  "
+                f"{'-':>10}  {'-':>5}{marker}"
+            )
+            if mean_r > 0.15:
+                warnings.append(
+                    f"{shape.name} / fp8++ vs triton cross-kernel: mean_rtol={mean_r:.3g} "
+                    "(exceeds combined-noise floor; investigate)"
+                )
 
         for label, backend in TORCH_MODE_SPECS:
             try:
                 mode_fn = dispatch_torch(backend)
-                m = measure_mode(mode_fn, q, k, v, mask, out_ref)
+                m, _ = measure_mode(mode_fn, q, k, v, mask, out_ref)
             except Exception as exc:
                 # Torch backends have shape/dtype/mask restrictions; skipping
                 # is normal (e.g. FLASH rejects certain mask layouts).
