@@ -103,6 +103,62 @@ synthetic wide-V. No material difference.
 quality improvement from `scale_max=2.25` on the non-++ path. Until
 then, this is closed.
 
+### Sage 3 per-block Q mean backport: closed as low-impact on sm89 fp8++
+
+**Investigated 2026-04-24** (research spike, not a full backport).
+
+Sage 3's `sageattention3_blackwell/sageattn3/api.py::preprocess_qkv`
+adds a preprocessing step sage 2.x lacks: Q is split into groups of
+128 tokens along the sequence dim, each group's mean is subtracted
+before quantization, and a `delta_s = qm @ K^T` correction tensor is
+passed to the kernel for use during softmax reconstruction. Sage 2
+only centers K (via `smooth_k=True`) and never centers Q at all.
+
+For FP4 (sage 3's quant format, 16 levels) this is a first-order
+precision win. Question: is it worth backporting to sage 2's sm89
+fp8++ path, which uses INT8 Q (256 levels)?
+
+**Empirical check** via a standalone INT8 Q quant-roundtrip experiment
+(per-block quantize -> dequantize, measure rtol to original fp32):
+
+| Q distribution    | |DC|/std | rtol_baseline | rtol_centered | improvement |
+|-------------------|----------|---------------|---------------|-------------|
+| typical           | ~0.16    | 0.0363        | 0.0331        | ~9%         |
+| skewed (large DC) | ~0.80    | 0.0351        | 0.0252        | ~28%        |
+
+That is Q quant precision. Translating to end-to-end attention rtol
+(fp8++ currently measured at ~0.097 vs SDPA on LTX shapes): the Q
+quant floor is roughly a third of total rtol budget (rest is FP8 V +
+accumulation). A 9% improvement on Q yields ~2-4% end-to-end rtol
+improvement -- well below the run-to-run noise floor. A 28%
+improvement on Q (for a skewed model) yields ~8-10% end-to-end.
+
+**Decision:** don't backport. Three reasons:
+
+1. LTX's Q activations almost certainly fall into the "typical" DC
+   range (normalized transformer activations with modest channel
+   biases), where the expected fp8++ rtol improvement is ~0.002-0.004
+   absolute -- imperceptible at render level.
+2. The kernel-side work is non-trivial: `csrc/qattn/sm89_qk_int8_sv_f8_*.cu`
+   would need a new `delta_s` input, modifications to the softmax
+   reduction to apply the correction, and matched changes in the
+   Python quantization path (`sageattention/quant.py`) to compute and
+   pack per-block Q means. Days of work for a sub-noise-floor win on
+   our primary workload.
+3. Sage 2's existing `smooth_k` already captures the K-centering
+   half of the idea. The specific new capability (per-block Q mean)
+   is the marginal addition, not the main event.
+
+**Trigger to reopen:**
+- LTX's actual Q DC offset measured at |DC|/std > 0.5 in production.
+  (Would require instrumenting the LTX model's Q projections;
+  AudioLoopHelper could capture this if telemetry grows that far.)
+- A visible artifact in fp8++ output that isn't explained by bf16
+  activations, fp8 weight quant, or VAE.
+- A future workload with shorter-bit Q quantization (fp4 or below)
+  where per-block mean becomes a first-order win rather than a
+  third-order refinement.
+
 ### Session-level attention telemetry summary (AudioLoopHelper side)
 
 Cross-repo backlog item, tracked here because it feeds sage-fork's
