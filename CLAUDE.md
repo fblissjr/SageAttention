@@ -184,6 +184,28 @@ We deliberately have no CI. Verify by running the LTX-shape test and
 the full downstream-consumer pytest suite on this box before trusting
 a change.
 
+## fp16 matmul accumulation flag
+
+`torch.backends.cuda.matmul.allow_fp16_accumulation` (available in
+torch 2.7.1+; exposed by KJ's `CheckpointLoaderKJ` as
+`enable_fp16_accumulation`): does NOT affect sage's internals.
+
+Verified 2026-04-24:
+
+- Sage's Q @ K^T and P @ V are done inside its own int8/fp8
+  CUDA/Triton kernels via tensor cores. No cuBLAS on any path -- grep
+  of `csrc/` finds zero `cublas` references.
+- Sage does call `torch.matmul` exactly once, in
+  `core.py::lse_correction` (when `smooth_k=True` AND
+  `return_lse=True`). That path isn't taken by the ComfyUI
+  `optimized_attention_override` hook, which never asks for LSE.
+- Net effect on attention: zero.
+
+What the flag DOES affect: torch's own matmuls for the Q/K/V/output
+linear projections around attention (those go through cuBLAS). For
+LTX-2.3 that's ~5-10% of total gen time in the linear layers. Safe
+to enable for speedup; impact on sage attention output is nil.
+
 ## Compile / torch.compile
 
 Not used. The downstream consumer node wraps sage in
