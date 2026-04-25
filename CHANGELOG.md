@@ -204,6 +204,33 @@ looks like a bugfix on a path we use (sm80/sm89 qattn kernels,
 fused ops, attn_utils). Everything else: note in the next survey,
 keep moving.
 
+### Bench env re-snapshot
+
+Process item, not engineering work. The `tests/test_sageattn_ltx_shapes.py`
+baselines are pinned to a specific (torch, triton, CUDA, sage) version
+tuple recorded in `internal/bench_env_<date>.txt`. Re-run the test with
+soft-warn enabled and re-snapshot the env file when ANY of these change:
+
+- `torch` major or minor (e.g. 2.11 -> 2.12, or any cuXYZ swap)
+- `triton` minor (e.g. 3.6 -> 3.7)
+- CUDA toolkit (e.g. 13.0 -> 13.1)
+- `sage` git rev — automatic on every `./build.sh`, but worth a fresh
+  bench if the rev changed since last measurement
+
+What "real change" means: any (shape, mode) wall-clock that drifted >5%
+from the previous snapshot is worth investigating. <5% is run-to-run
+noise (we logged 1.4% on the cu128 -> cu130 transition). The rtol
+fingerprints (e.g. cross-attn-with-mask 0.94 at kv=32) should be
+*invariant* across these upgrades; if they drift, that's a kernel change
+upstream and warrants tracing back.
+
+The snapshot file lives under `internal/` (gitignored). Naming convention:
+`bench_env_YYYY-MM-DD.txt`. Keep prior snapshots; they're the audit trail
+when someone says "this used to be faster."
+
+**Trigger to act:** any version bump in the list above, OR a measured >5%
+shape-level drift on a routine workflow gen.
+
 ### Session-level attention telemetry summary (AudioLoopHelper side)
 
 Cross-repo backlog item, tracked here because it feeds sage-fork's
@@ -243,6 +270,13 @@ raw JSONL is sufficient.
     head_dim=64. First measurement: sage fp8++ 0.64ms vs torch_flash 1.31ms
     (2.05x). Closes the "do we need a per-model-class router branch?"
     question with a No.
+  * `z_image_turbo_self_attn_4608_h32_d120` shape (S3-DiT single-stream:
+    32 heads, head_dim=120 -- unusual, picked because 3840/32=120). Tests
+    that sage's CUDA kernels handle the non-power-of-2 head_dim. First
+    measurement: sage fp8++ 1.32ms vs torch_flash 2.23ms (2.73x SDPA,
+    1.69x torch_flash); fp16_triton 1.72ms (2.10x SDPA). All sage modes
+    ran cleanly on head_dim=120 -- no per-model branch needed for
+    Z-Image-Turbo specifically.
 - `internal/bench_env_2026-04-25.txt` -- env snapshot
   (torch 2.11.0+cu130, triton 3.6.0, sage editable, RTX 4090 / sm89, CUDA 13.0)
   locking the version surface so later phase deltas are real perf changes.

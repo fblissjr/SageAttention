@@ -83,6 +83,14 @@ SHAPES = [
     # LTX's head_dim=64. If sage doesn't win here, the consumer-side router
     # would need a per-model-class branch.
     Shape("image_gen_self_attn_4096_h24_d128", 1, 24, 4096, 4096, 128, False),
+    # Z-Image-Turbo self-attn (S3-DiT, single-stream). Architecture: 30
+    # layers, hidden=3840, 32 heads, head_dim=120 (3840/32). Single-stream
+    # means text+image tokens concatenate into one sequence; ~4096 image
+    # tokens (FLUX VAE at 1024^2) + ~512 Qwen3-4B text tokens ~= 4608.
+    # head_dim=120 is unusual -- if sage's CUDA kernels don't support it,
+    # this row SKIPs and the consumer needs a Z-Image-specific routing
+    # branch (triton handles arbitrary head_dim via JIT).
+    Shape("z_image_turbo_self_attn_4608_h32_d120", 1, 32, 4608, 4608, 120, False),
 ]
 
 
