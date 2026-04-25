@@ -40,11 +40,12 @@ mkdir -p internal/log
 DATE="$(date +%F)"
 ENV_FILE="internal/bench_env_${DATE}.txt"
 BENCH_LOG="internal/log/test_sageattn_ltx_shapes_${DATE}.log"
+IMAGE_LOG="internal/log/test_sageattn_image_shapes_${DATE}.log"
 SPIKE_LOG="internal/log/spike_torch_compile_${DATE}.log"
 
 echo "== venv:        ${VENV_DIR}"
 echo "== repo root:   ${REPO_ROOT}"
-echo "== logs to:     ${ENV_FILE}, ${BENCH_LOG}, ${SPIKE_LOG}"
+echo "== logs to:     ${ENV_FILE}, ${BENCH_LOG}, ${IMAGE_LOG}, ${SPIKE_LOG}"
 echo
 
 # 1. env snapshot. uv pip freeze (since uv venvs lack a pip module).
@@ -70,17 +71,24 @@ for m in ['torch', 'triton', 'sageattention']:
     fi
 } > "${ENV_FILE}"
 
-# 2. LTX-shape bench.
-echo "[2/3] running tests/test_sageattn_ltx_shapes.py"
+# 2. LTX-shape bench (head_dim=64).
+echo "[2/4] running tests/test_sageattn_ltx_shapes.py"
 "${PY}" tests/test_sageattn_ltx_shapes.py 2>&1 | tee "${BENCH_LOG}"
 
-# 3. torch.compile spike.
+# 3. Image-shape bench (head_dim ∈ {120, 128}). Separate file so the
+# LTX file stays focused; both reuse the same dispatch helpers.
 echo
-echo "[3/3] running tests/spike_torch_compile.py"
+echo "[3/4] running tests/test_sageattn_image_shapes.py"
+"${PY}" tests/test_sageattn_image_shapes.py 2>&1 | tee "${IMAGE_LOG}"
+
+# 4. torch.compile spike.
+echo
+echo "[4/4] running tests/spike_torch_compile.py"
 "${PY}" tests/spike_torch_compile.py 2>&1 | tee "${SPIKE_LOG}"
 
 echo
 echo "done. summary:"
 echo "  env:     ${ENV_FILE}"
-echo "  bench:   ${BENCH_LOG}  ($(grep -c '^===' "${BENCH_LOG}" || echo 0) shapes)"
+echo "  ltx:     ${BENCH_LOG}  ($(grep -c '^===' "${BENCH_LOG}" || echo 0) shapes)"
+echo "  image:   ${IMAGE_LOG}  ($(grep -c '^===' "${IMAGE_LOG}" || echo 0) shapes)"
 echo "  spike:   ${SPIKE_LOG}  ($(grep -E '^(verdict|final)' "${SPIKE_LOG}" | tail -1))"

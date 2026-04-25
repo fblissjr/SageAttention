@@ -181,11 +181,11 @@ cd /tmp && rm -rf sage-survey-thuml sage-survey-woct && \
 git -C /tmp/sage-survey-thuml log --oneline --since="3 months ago"
 git -C /tmp/sage-survey-woct  log --oneline --since="3 months ago"
 
-# diff the surfaces we care about against our tree
-diff -qr /tmp/sage-survey-thuml/sageattention /home/your/sage-fork/sageattention
-diff -qr /tmp/sage-survey-thuml/csrc          /home/your/sage-fork/csrc
-diff -qr /tmp/sage-survey-woct/sageattention  /home/your/sage-fork/sageattention
-diff -qr /tmp/sage-survey-woct/csrc           /home/your/sage-fork/csrc
+# diff the surfaces we care about against our tree (run from sage-fork repo root)
+diff -qr /tmp/sage-survey-thuml/sageattention ./sageattention
+diff -qr /tmp/sage-survey-thuml/csrc          ./csrc
+diff -qr /tmp/sage-survey-woct/sageattention  ./sageattention
+diff -qr /tmp/sage-survey-woct/csrc           ./csrc
 ```
 
 Look for: new `.cu`/`.cuh` fixes (especially in `qattn/`, `fused/`,

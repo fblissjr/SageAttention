@@ -995,8 +995,8 @@ def sageattn_warmup(
       autotune cache keys on shape dimensions (qo_len, kv_len, head_dim,
       block sizes), not layout, so a single HND warmup covers callers
       that use either HND or NHD at the same shape.
-    - Triton caches results to disk (~/.triton/cache), so the benefit
-      survives process restarts. `./build.sh` invalidates the cache.
+    - Triton caches results to disk under its standard cache dir, so the
+      benefit survives process restarts. `./build.sh` invalidates the cache.
     """
     for shape in shapes:
         B, H, Sq, Skv, D = shape

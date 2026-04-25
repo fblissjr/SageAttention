@@ -39,8 +39,8 @@ We measure and validate on **sm89 / RTX 40xx / Ada** only. The code compiles and
 
 ## Where it gets used
 
-Sage is a general PyTorch attention library — anything that imports `sageattention` or wraps `torch.nn.functional.scaled_dot_product_attention` can pick this fork up via the editable install. Common paths:
+Sage is a general PyTorch attention library. Any consumer that imports `sageattention` or replaces `torch.nn.functional.scaled_dot_product_attention` picks this fork up via the editable install. The kernel API is `sageattention.sageattn(q, k, v, ...)`; specific kernels (`sageattn_qk_int8_pv_fp16_cuda`, `sageattn_qk_int8_pv_fp8_cuda`, `sageattn_qk_int8_pv_fp16_triton`, ...) are also exported.
 
-- **ComfyUI**, via [KJNodes](https://github.com/kijai/ComfyUI-KJNodes) (`PathchSageAttentionKJ`, `LTX2MemoryEfficientSageAttentionPatch`) or any custom node that registers an `optimized_attention_override` or a `WrappersMP.DIFFUSION_MODEL` wrapper. The `auto` setting on `PathchSageAttentionKJ` routes masked calls to Triton internally, dodging the mask-path gap in `CHANGELOG.md`.
-- **Diffusers / generic PyTorch** — drop-in replacement for `scaled_dot_product_attention`. The kernel API is `sageattention.sageattn(q, k, v, ...)`; specific kernels (`sageattn_qk_int8_pv_fp8_cuda`, `sageattn_qk_int8_pv_fp16_triton`, etc.) are also exported.
-- **Anything else with a PyTorch attention call site.** Routing policy and tracing live in the consumer; sage-fork stays primitive (kernels + the bench harness, no policy).
+Model classes the bench harness validates against on sm89 today: **LTX 2.3** (head_dim=64), **Z-Image-Turbo** (S3-DiT, head_dim=120), and **Flux-class** image gen (head_dim=128). Add a row to `tests/test_sageattn_image_shapes.py` (or the LTX file, depending on shape category) before relying on a new model class.
+
+**Mask-aware caveat.** Sage's `_cuda` kernels silently drop `attn_mask`; only `sageattn_qk_int8_pv_fp16_triton` handles masks correctly. Consumers that route masked vs unmasked calls separately should send masked calls to the Triton kernel; consumers that just call `sageattn()` get this routing for free via the top-level dispatcher. See [`CHANGELOG.md`](./CHANGELOG.md) "Known kernel bugs" for the full story.

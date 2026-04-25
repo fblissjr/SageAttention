@@ -89,25 +89,42 @@ so re-run the test after every rebuild.
 ## Testing
 
 Standalone scripts (no pytest). Run against the installed sage in
-`$VIRTUAL_ENV`, not the source tree directly:
+`$VIRTUAL_ENV`, not the source tree directly. Easiest path: the
+one-shot runner.
 
 ```bash
-# Baseline numeric sanity (small shape, ~1s):
-${VIRTUAL_ENV}/bin/python tests/test_sageattn.py
+./tests/run_all.sh                     # env snapshot + ltx + image + spike
+VENV=/path/to/venv ./tests/run_all.sh  # explicit venv
+```
 
-# LTX-2.3 shape + kernel sweep (9 shapes x {5 sage + 3 torch} modes, ~30-60s on 4090):
+Individual tests if you want one specifically:
+
+```bash
+# LTX-2.3 shape + kernel sweep (head_dim=64; ~30s on 4090):
 ${VIRTUAL_ENV}/bin/python tests/test_sageattn_ltx_shapes.py
 
-# Flash-attn 2/3 comparisons (if flash-attn installed):
+# Image-gen shape sweep (head_dim ∈ {120, 128}; Flux-class + Z-Image-Turbo):
+${VIRTUAL_ENV}/bin/python tests/test_sageattn_image_shapes.py
+
+# torch.compile compatibility spike (re-run after torch upgrades):
+${VIRTUAL_ENV}/bin/python tests/spike_torch_compile.py
+
+# Upstream's flash-attn comparisons (if flash-attn installed):
 ${VIRTUAL_ENV}/bin/python tests/test_flashattn2.py
 ${VIRTUAL_ENV}/bin/python tests/test_flashattn3.py
 ```
 
-Shape coverage: head_dim in {64 (LTX), 128 (Flux-class), 120 (Z-Image
-S3-DiT)}. sage's CUDA kernels handle all three cleanly on sm89 --
-including the non-power-of-2 d=120 (verified 2026-04-25). If a new
-model class brings a different head_dim, add a row before assuming
-compatibility.
+`tests/test_sageattn.py` exists upstream as a one-shape sanity test;
+mostly subsumed by `test_sageattn_ltx_shapes.py` (which covers a
+broader sweep including the same kind of small self-attn shape). Run
+it only if you want a 1-second smoke check before the longer bench.
+
+Shape coverage today: head_dim in {64 (LTX, in `test_sageattn_ltx_shapes.py`),
+128 (Flux-class) and 120 (Z-Image-Turbo S3-DiT), both in
+`test_sageattn_image_shapes.py`}. sage's CUDA kernels handle all three
+cleanly on sm89 -- including the non-power-of-2 d=120 (verified
+2026-04-25). If a new model class brings a different head_dim, add a
+row to the appropriate file before assuming compatibility.
 
 `tests/test_sageattn_ltx_shapes.py` is the load-bearing test for LTX
 workflows. It characterizes accuracy AND speed per (shape, mode)
@@ -140,6 +157,32 @@ tests once we do fix them.
 - **Never push without being asked.** Origin is the maintainer's
   personal GitHub fork; the maintainer decides when to force-push
   after any history rewrite.
+- **Consumer-agnostic framing in committed material.** Anything checked
+  in (README, CLAUDE.md, CHANGELOG, code comments, CLI labels, commit
+  messages) refers to downstream callers as "downstream consumer" or
+  "consumer" -- generic. Do **not** name specific consumer projects
+  or custom nodes by name. Model targets are different: naming the
+  *model class* the bench supports (LTX 2.3, Z-Image-Turbo, Flux,
+  etc.) is fine and useful. The distinction:
+    - model class -> name it (bench shapes, head_dim coverage)
+    - consumer project -> generic phrasing
+  Real-world validation runs against private consumer projects /
+  workflows; that work stays out of this repo so this repo stays
+  focused on kernels + bench. If you find yourself typing the name
+  of a specific custom node here, stop and rephrase.
+- **Project-internal phase numbers don't ship.** "Phase 0", "Phase 5",
+  "TDD red-first", task IDs -- those belong in the plan file or
+  commit messages, not in shipped code, CLI output, or CHANGELOG.
+  Operators reading this repo months later don't have the plan
+  context.
+- **Path discipline.** Every committed path is repo-relative. Absolute
+  home paths and tilde-prefixed external paths leak. Use generic
+  placeholders (`<repo_root>`, `/path/to/venv`, `<some-path>`) or just
+  drop the prefix (`./scripts/foo.sh`). `internal/` is gitignored and
+  exempt from anything ever shipping. The `path-privacy` plugin's
+  pre-commit and commit-msg hooks hard-block the leak class; they're
+  installed in this repo and run automatically. If a hook fires, edit
+  the file to remove the absolute portion -- do not bypass.
 
 ## What's ours vs what's upstream
 
@@ -182,29 +225,30 @@ the squashed history is the canonical state. `origin/main` still
 carries the pre-squash 196-commit upstream history; the next push
 will need `git push --force-with-lease origin main`.
 
-## The consumers on the other side
+## The consumer surface
 
-Two consumer paths matter:
+Sage exposes two surfaces to downstream consumers:
 
-1. **KJNodes (`kijai/ComfyUI-KJNodes`)** -- the general path most
-   ComfyUI users hit. `PathchSageAttentionKJ` is a dropdown of sage
-   modes. On `auto` it calls sage's top-level `sageattn()` dispatcher,
-   which routes masked calls to Triton internally -- so it dodges the
-   CUDA mask-path gap transparently. Explicitly overriding to
-   `_cuda` / `sageattn3*` modes bypasses the dispatcher and exposes
-   the bug. The second node, `LTX2MemoryEfficientSageAttentionPatch`,
-   only patches LTX's `attn1` (self-attn), which doesn't carry a mask
-   in LTX -- so scope alone makes it safe.
+1. **`sageattn()` top-level dispatcher.** Picks a kernel based on the
+   detected arch + CUDA version. On sm89 + CUDA >= 12.8: lands on
+   `sageattn_qk_int8_pv_fp8_cuda` with `pv_accum_dtype="fp32+fp16"`
+   (sage 2++). Routes masked calls to the Triton kernel transparently,
+   which is the only mask-correct path (see CHANGELOG / Known kernel
+   bugs). Most consumers should call this and let dispatch decide.
+2. **Specific kernel exports** -- `sageattn_qk_int8_pv_fp16_cuda`,
+   `sageattn_qk_int8_pv_fp8_cuda`, `sageattn_qk_int8_pv_fp16_triton`,
+   etc. Bypass the dispatcher; the caller picks. **Masked attention
+   only works with `_fp16_triton`**; passing `attn_mask` to a `_cuda`
+   kernel silently drops the mask and produces numerically wrong
+   output. A consumer that mixes masked + unmasked calls in one
+   forward should either route by mask presence (use `_fp16_triton`
+   when `attn_mask is not None`, anything else otherwise) or just
+   call the dispatcher.
 
-2. **Our own downstream ComfyUI custom-node** -- patches the model's
-   attention with explicit routing. Defaults to `auto_mask_aware`:
-   masked calls go to Triton (route around the CUDA mask bug),
-   unmasked go to the user-chosen kernel (default fp8++). Different
-   tradeoff from KJ: lets callers pick a fast non-Triton kernel for
-   the unmasked half while staying correct on masked calls.
-
-Routing policy lives in the consumer nodes. Sage-fork stays
-primitive -- kernels only, no policy.
+Routing policy is the consumer's responsibility. Sage-fork stays
+primitive: kernels only, no policy. We validate the bench harness
+here; we test the policy interaction in private downstream consumer
+repos that aren't part of this fork.
 
 ## If we ever need to fix a sage bug ourselves
 
