@@ -42,7 +42,11 @@ Relevant pieces for us:
 
 ## Install / build
 
-Always active-venv. Never bare `python`:
+Always active-venv. Never bare `python`. If `VIRTUAL_ENV` is unset in the
+shell, the live ComfyUI venv is at `~/ComfyUI/.venv` (uv-managed); use
+`${venv}/bin/python` directly. `python -m pip freeze` fails on uv venvs
+(no pip module) -- use `VIRTUAL_ENV=<venv> <venv>/bin/uv pip freeze`
+for env snapshots.
 
 ```bash
 source /path/to/venv/bin/activate
@@ -84,6 +88,12 @@ ${VIRTUAL_ENV}/bin/python tests/test_sageattn_ltx_shapes.py
 ${VIRTUAL_ENV}/bin/python tests/test_flashattn2.py
 ${VIRTUAL_ENV}/bin/python tests/test_flashattn3.py
 ```
+
+Shape coverage: head_dim in {64 (LTX), 128 (Flux-class), 120 (Z-Image
+S3-DiT)}. sage's CUDA kernels handle all three cleanly on sm89 --
+including the non-power-of-2 d=120 (verified 2026-04-25). If a new
+model class brings a different head_dim, add a row before assuming
+compatibility.
 
 `tests/test_sageattn_ltx_shapes.py` is the load-bearing test for LTX
 workflows. It characterizes accuracy AND speed per (shape, mode)
@@ -215,6 +225,14 @@ positives:
 
 If pyright flags something inside code we actually added and it
 looks substantive, investigate. Otherwise skip.
+
+## Bench env discipline
+
+Every wall-clock comparison in `test_sageattn_ltx_shapes.py` is pinned
+to the version surface in `internal/bench_env_<date>.txt`. After any
+torch/triton/CUDA/sage-rev bump, re-run the test and resnapshot. Trigger
+doc + drift threshold: `CHANGELOG.md` / Open work / "Bench env
+re-snapshot."
 
 ## fp16 matmul accumulation flag
 
