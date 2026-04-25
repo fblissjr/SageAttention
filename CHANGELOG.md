@@ -305,6 +305,17 @@ raw JSONL is sufficient.
   noise. Going forward the regression yardstick is 19.95 ms. Other shapes
   drifted by similar magnitudes; cross-attn rtol fingerprints
   (CUDA-mask-bug signature) are unchanged from prior characterization.
+- `tests/spike_torch_compile.py` -- 30-min Phase 5 spike measuring whether
+  the consumer-side `torch.compiler.disable()` around sage is still
+  warranted on torch 2.11. Both `mode='reduce-overhead'` (CUDA Graphs)
+  and `mode='default'` (inductor without CUDA Graphs) compiled cleanly
+  but produced output with mean_rtol 0.0279 vs eager -- 2.8% drift, well
+  above the 1% tolerance. Verdict: keep the disable. The 2.8% drift is
+  consistent across both modes which suggests compile is mutating an
+  intermediate (likely autocast or op fusion around sage's int8/fp8
+  dispatch) regardless of CUDA Graphs. Re-run the spike on future torch
+  releases; the disable's reopen-trigger is "compile produces bounded
+  rtol AND a measurable speedup."
 - `setup.py` -- `_qattn_sm80` is now also built when compute
   capability 8.9 (Ada) is detected. Framed as a regression fix from
   `woct0rdho/SageAttention`: thu-ml's setup.py gates the SM80
