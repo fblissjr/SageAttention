@@ -50,7 +50,65 @@ from .quant import sub_mean
 from .quant import per_channel_fp8
 
 from typing import Any, Callable, List, Literal, Optional, Sequence, Tuple, Union
+import threading
 import warnings
+
+
+# Stable short names for the kernel dispatched by each public sageattn*
+# entry point. Consumers can match these strings directly against
+# get_last_dispatched_kernel() output without mirroring sage's routing
+# table. Adding a new variant requires a new constant; renaming an
+# existing constant is a breaking change for consumers.
+KERNEL_FP16_TRITON = "fp16_triton"
+KERNEL_FP16_CUDA = "fp16_cuda"               # pv_accum_dtype="fp32"
+KERNEL_FP16_CUDA_FP16 = "fp16_cuda(fp16)"    # pv_accum_dtype="fp16"
+KERNEL_FP16_CUDA_PP = "fp16_cuda++"          # pv_accum_dtype="fp16+fp32"
+KERNEL_FP8_CUDA = "fp8_cuda"                 # pv_accum_dtype="fp32"
+KERNEL_FP8_CUDA_FP32 = "fp8_cuda(fp32+fp32)" # pv_accum_dtype="fp32+fp32"
+KERNEL_FP8_CUDA_PP = "fp8_cuda++"            # pv_accum_dtype="fp32+fp16" (SageAttention2++)
+KERNEL_FP8_CUDA_SM90 = "fp8_cuda_sm90"
+KERNEL_VARLEN_TRITON = "varlen_triton"
+
+KNOWN_KERNEL_NAMES = frozenset({
+    KERNEL_FP16_TRITON,
+    KERNEL_FP16_CUDA,
+    KERNEL_FP16_CUDA_FP16,
+    KERNEL_FP16_CUDA_PP,
+    KERNEL_FP8_CUDA,
+    KERNEL_FP8_CUDA_FP32,
+    KERNEL_FP8_CUDA_PP,
+    KERNEL_FP8_CUDA_SM90,
+    KERNEL_VARLEN_TRITON,
+})
+
+# Thread-local: each thread sees only its own dispatches. CUDA work is
+# synchronous and doesn't yield, so this is the right primitive for the
+# (call sageattn -> read kernel name) pattern. Don't read across an
+# `await`; use contextvars if asyncio support is ever needed.
+_dispatch_state = threading.local()
+
+
+def _record_dispatch(name: str) -> None:
+    _dispatch_state.last = name
+
+
+def get_last_dispatched_kernel() -> Optional[str]:
+    """Return the kernel-name string of the most recent sageattn* call
+    on this thread, or None if no call has happened yet on this thread.
+
+    Stable values are listed in `KNOWN_KERNEL_NAMES`. Read this value
+    immediately after the sage call -- if your code yields (asyncio,
+    or another sage call from the same thread) between the call and
+    the read, the value can be overwritten.
+    """
+    return getattr(_dispatch_state, "last", None)
+
+
+def _reset_dispatch_for_test() -> None:
+    """Test-only: clear this thread's dispatch state so the next read
+    returns None. Not part of the public API."""
+    if hasattr(_dispatch_state, "last"):
+        del _dispatch_state.last
 
 
 def get_cuda_version():
@@ -253,6 +311,8 @@ def sageattn_qk_int8_pv_fp16_triton(
         assert attn_mask.dtype == torch.bool or attn_mask.dtype == q.dtype, "attn_mask must be of dtype bool or the same dtype as q."
         assert attn_mask.device == q.device, "All tensors must be on the same device."
 
+    _record_dispatch(KERNEL_FP16_TRITON)
+
     head_dim_og = q.size(-1)
 
     if head_dim_og < 64:
@@ -397,6 +457,8 @@ def sageattn_varlen(
     assert dtype in [torch.float16, torch.bfloat16], "Input tensors must be in dtype of torch.float16 or torch.bfloat16"
     assert q.device == k.device == v.device, "All tensors must be on the same device."
     assert q.dtype == k.dtype == v.dtype, "All tensors must have the same dtype."
+
+    _record_dispatch(KERNEL_VARLEN_TRITON)
 
     head_dim_og = q.size(-1)
 
@@ -590,9 +652,11 @@ def sageattn_qk_int8_pv_fp16_cuda(
         smooth_v = False
 
     if pv_accum_dtype == 'fp32':
+        _record_dispatch(KERNEL_FP16_CUDA)
         v = v.to(torch.float16)
         lse = sm80_compile.qk_int8_sv_f16_accum_f32_attn(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
     elif pv_accum_dtype == "fp16":
+        _record_dispatch(KERNEL_FP16_CUDA_FP16)
         if smooth_v:
             smoothed_v, vm = sub_mean(v, tensor_layout=tensor_layout)
             lse = sm80_compile.qk_int8_sv_f16_accum_f16_fuse_v_mean_attn(q_int8, k_int8, smoothed_v, o, q_scale, k_scale, vm, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
@@ -600,6 +664,7 @@ def sageattn_qk_int8_pv_fp16_cuda(
             v = v.to(torch.float16)
             lse = sm80_compile.qk_int8_sv_f16_accum_f16_attn(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
     elif pv_accum_dtype == "fp16+fp32":
+        _record_dispatch(KERNEL_FP16_CUDA_PP)
         v = v.to(torch.float16)
         lse = sm80_compile.qk_int8_sv_f16_accum_f16_attn_inst_buf(q_int8, k_int8, v, o, q_scale, k_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
     else:
@@ -776,13 +841,16 @@ def sageattn_qk_int8_pv_fp8_cuda(
     v_fp8, v_scale, vm = per_channel_fp8(v, tensor_layout=tensor_layout, scale_max=quant_v_scale_max, smooth_v=smooth_v)
 
     if pv_accum_dtype == "fp32":
+        _record_dispatch(KERNEL_FP8_CUDA)
         if smooth_v:
             lse = sm89_compile.qk_int8_sv_f8_accum_f32_fuse_v_scale_fuse_v_mean_attn(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, vm, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
         else:
             lse = sm89_compile.qk_int8_sv_f8_accum_f32_fuse_v_scale_attn(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
     elif pv_accum_dtype == "fp32+fp32":
+        _record_dispatch(KERNEL_FP8_CUDA_FP32)
         lse = sm89_compile.qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
     elif pv_accum_dtype == "fp32+fp16":
+        _record_dispatch(KERNEL_FP8_CUDA_PP)
         lse = sm89_compile.qk_int8_sv_f8_accum_f16_fuse_v_scale_attn_inst_buf(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
 
     o = o[..., :head_dim_og]
@@ -951,6 +1019,7 @@ def sageattn_qk_int8_pv_fp8_cuda_sm90(
         raise NotImplementedError("Please use pv_accum_dtype='fp32+fp32' for sm90.")
         lse = sm90_compile.qk_int8_sv_f8_accum_f32_fuse_v_scale_attn(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
     elif pv_accum_dtype == "fp32+fp32":
+        _record_dispatch(KERNEL_FP8_CUDA_SM90)
         lse = sm90_compile.qk_int8_sv_f8_accum_f32_fuse_v_scale_attn_inst_buf(q_int8, k_int8, v_fp8, o, q_scale, k_scale, v_scale, _tensor_layout, _is_caual, _qk_quant_gran, sm_scale, _return_lse)
 
     o = o[..., :head_dim_og]

@@ -289,6 +289,23 @@ phase numbers don't ship, path-privacy hooks installed.
 
 #### Added
 
+- `sageattention.get_last_dispatched_kernel() -> str | None` -- public
+  helper that returns the kernel-name string of the most recent
+  `sageattn*` call on the current thread, or `None` if no call has
+  happened yet on this thread. Stable short names exposed as module
+  constants (`KERNEL_FP16_TRITON`, `KERNEL_FP8_CUDA_PP`, etc.) and
+  enumerated in `KNOWN_KERNEL_NAMES`. Backed by a `threading.local()`
+  set at the top of each entry point with the resolved kernel name --
+  zero API change for callers who don't read the helper. Lets a
+  downstream tracer record what sage actually dispatched to (instead
+  of mirroring the routing table from `core.py::sageattn` or treating
+  the kernel as opaque), which is the missing input the
+  "mask-kernel work justified?" gate in a consumer-side summary needs
+  to fire correctly. Read the value immediately after the sage call
+  -- if your code yields (asyncio, or another sage call from the same
+  thread) between call and read, the value can be overwritten.
+  Verified end-to-end on RTX 4090 / sm89 / CUDA 13.0 / torch 2.11 via
+  `tests/test_dispatched_kernel_telemetry.py`.
 - `tests/run_all.sh` -- one-shot validation runner. Resolves the venv from
   `$VENV` or `$VIRTUAL_ENV`, snapshots the env to
   `internal/bench_env_<today>.txt`, runs the LTX bench, the image bench,

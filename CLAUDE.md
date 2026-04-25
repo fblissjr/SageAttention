@@ -203,6 +203,16 @@ Our additions and modifications (tracked in CHANGELOG.md):
   sm89 to ~2ms post-warm. Defaults to the Triton kernel only (CUDA
   kernels are build-time compiled, no warmup benefit). Consumer nodes
   call this at model-patch time.
+- `sageattention.get_last_dispatched_kernel() -> str | None` -- public
+  helper exposing which kernel the most recent `sageattn*` call on
+  this thread dispatched to, as a stable short string (`fp16_triton`,
+  `fp8_cuda++`, etc.; full set in `KNOWN_KERNEL_NAMES`). Lets
+  consumer tracers record sage's routing decision instead of
+  mirroring the dispatch table or treating it as opaque. Backed by a
+  `threading.local()` set inside each entry point's dispatch branch.
+  Read immediately after the sage call -- thread-local, not
+  contextvar-aware. Test:
+  `tests/test_dispatched_kernel_telemetry.py`.
 - `sageattention/triton/attn_qk_int8_per_block.py` -- `@triton.autotune`
   over `num_warps` and `num_stages`. Zero immediate perf delta on
   sm89 + LTX shapes (hardcoded config was already optimal) but
@@ -213,6 +223,12 @@ Our additions and modifications (tracked in CHANGELOG.md):
   perf measurement across sage kernels AND torch SDPA backends
   (FLASH / EFFICIENT / CUDNN). Doubles as a regression guard for
   "did a torch upgrade close the sage perf gap?"
+- `tests/test_dispatched_kernel_telemetry.py` -- standalone-script
+  test for the `get_last_dispatched_kernel()` helper. Verifies
+  exports, initial-None state, dispatcher-routes-to-fp8++ on sm89,
+  per-variant kernel name strings, and thread-local isolation.
+  Pure Python; no rebuild needed after edits to `core.py` or
+  `__init__.py`.
 - `tests/repros/repro_cuda_mask_kernel.py` -- minimal repro for the
   CUDA mask-path missing-feature documented in CHANGELOG.
 - `CHANGELOG.md` -- versioned divergence + Known kernel bugs + Backlog + Decision log + Recurring process items.
