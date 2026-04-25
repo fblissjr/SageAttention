@@ -78,6 +78,25 @@ pass confirmed the missing-feature root cause).
 Real open TODOs. Each has an explicit trigger-to-act; we don't do these
 speculatively.
 
+### Extract `tests/_helpers.py` for shared `make_qkv` + `require_cuda`
+
+Four standalone test files now duplicate near-identical scaffolding:
+`test_sageattn_ltx_shapes.py`, `test_sageattn_image_shapes.py`,
+`spike_torch_compile.py`, `test_dispatched_kernel_telemetry.py`. Each
+defines its own `_make_qkv()` (or `make_qkv()`) for building random
+QKV tensors, and each opens with the same `if not torch.cuda.is_available(): skip`
+guard. Lifting both into `tests/_helpers.py` would consolidate ~30
+lines across files; the standalone-script convention (no pytest, no
+conftest) means a flat helper module is the right shape, not a
+fixture.
+
+**Trigger to act:** next time one of these four test files needs
+editing for an unrelated reason. Don't do it speculatively -- the
+duplication is currently inert and the import path
+(`from _helpers import make_qkv`) needs `tests/` on `sys.path` which
+the standalone scripts don't set up today. Mild churn for tiny gain
+unless we're already in the file.
+
 ### Add mask support to the sm80/sm89 CUDA kernels
 
 Scope, measurement, and consumer workaround are in "Known kernel bugs"

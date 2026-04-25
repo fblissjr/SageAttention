@@ -69,6 +69,18 @@ KERNEL_FP8_CUDA_PP = "fp8_cuda++"            # pv_accum_dtype="fp32+fp16" (SageA
 KERNEL_FP8_CUDA_SM90 = "fp8_cuda_sm90"
 KERNEL_VARLEN_TRITON = "varlen_triton"
 
+KernelName = Literal[
+    "fp16_triton",
+    "fp16_cuda",
+    "fp16_cuda(fp16)",
+    "fp16_cuda++",
+    "fp8_cuda",
+    "fp8_cuda(fp32+fp32)",
+    "fp8_cuda++",
+    "fp8_cuda_sm90",
+    "varlen_triton",
+]
+
 KNOWN_KERNEL_NAMES = frozenset({
     KERNEL_FP16_TRITON,
     KERNEL_FP16_CUDA,
@@ -88,11 +100,11 @@ KNOWN_KERNEL_NAMES = frozenset({
 _dispatch_state = threading.local()
 
 
-def _record_dispatch(name: str) -> None:
+def _record_dispatch(name: KernelName) -> None:
     _dispatch_state.last = name
 
 
-def get_last_dispatched_kernel() -> Optional[str]:
+def get_last_dispatched_kernel() -> Optional[KernelName]:
     """Return the kernel-name string of the most recent sageattn* call
     on this thread, or None if no call has happened yet on this thread.
 

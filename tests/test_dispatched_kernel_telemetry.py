@@ -119,16 +119,18 @@ def test_thread_isolation():
     # threading.local() means each thread sees only its own dispatch
     # value. A worker thread reading the helper before any dispatch
     # should see None even if the main thread has already dispatched.
+    # Uses real kernel-name constants so the test stays inside the
+    # KernelName Literal (no type-checker false flags).
     _reset_dispatch_for_test()
-    _record_dispatch("main_value")
+    _record_dispatch(KERNEL_FP16_TRITON)
 
     worker_observations: list[str | None] = []
 
     def worker():
         # Worker starts fresh: its thread-local has no `last` attr yet
         worker_observations.append(get_last_dispatched_kernel())  # expect None
-        _record_dispatch("worker_value")
-        worker_observations.append(get_last_dispatched_kernel())  # expect "worker_value"
+        _record_dispatch(KERNEL_FP8_CUDA_PP)
+        worker_observations.append(get_last_dispatched_kernel())  # expect KERNEL_FP8_CUDA_PP
 
     t = threading.Thread(target=worker)
     t.start()
@@ -138,11 +140,11 @@ def test_thread_isolation():
         f"worker thread should not see main thread's dispatch; "
         f"got {worker_observations[0]!r}"
     )
-    assert worker_observations[1] == "worker_value", (
+    assert worker_observations[1] == KERNEL_FP8_CUDA_PP, (
         f"worker thread should see its own dispatch; "
         f"got {worker_observations[1]!r}"
     )
-    assert get_last_dispatched_kernel() == "main_value", (
+    assert get_last_dispatched_kernel() == KERNEL_FP16_TRITON, (
         f"main thread's value should be untouched by worker; "
         f"got {get_last_dispatched_kernel()!r}"
     )
