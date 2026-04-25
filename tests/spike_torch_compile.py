@@ -33,7 +33,11 @@ import torch
 
 SHAPE = (1, 32, 31776, 64)  # LTX self-attn-large, the load-bearing path
 DTYPE = torch.bfloat16
-RTOL_TOLERANCE = 1e-2  # compile shouldn't drift more than 1% from eager
+# Mean relative error tolerance: |compiled - eager| / |eager|, mean over
+# the output tensor. Not torch.allclose-style worst-case rtol; we accept
+# a fraction-of-elements approximation since compile may fuse precision-
+# affecting ops uniformly.
+MEAN_REL_ERR_TOLERANCE = 1e-2
 WARMUP = 2
 RUNS = 5
 
@@ -113,10 +117,10 @@ def main() -> int:
         try:
             out_compiled = out_compiled.clone()
             diff = (out_compiled.float() - out_eager.float()).abs()
-            rtol = (diff / out_eager.float().abs().clamp(min=1e-8)).mean().item()
-            print(f"  output rtol (compiled vs eager): {rtol:.4g}")
-            if rtol > RTOL_TOLERANCE:
-                print(f"  REJECT: rtol {rtol:.3g} > {RTOL_TOLERANCE}; output drift")
+            mean_rel_err = (diff / out_eager.float().abs().clamp(min=1e-8)).mean().item()
+            print(f"  mean relative error (compiled vs eager): {mean_rel_err:.4g}")
+            if mean_rel_err > MEAN_REL_ERR_TOLERANCE:
+                print(f"  REJECT: mean_rel_err {mean_rel_err:.3g} > {MEAN_REL_ERR_TOLERANCE}; output drift")
                 continue
         except Exception as exc:
             print(f"  output comparison errored: {type(exc).__name__}: {str(exc)[:140]}")
