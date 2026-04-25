@@ -49,7 +49,7 @@ echo "== logs to:     ${ENV_FILE}, ${BENCH_LOG}, ${IMAGE_LOG}, ${SPIKE_LOG}"
 echo
 
 # 1. env snapshot. uv pip freeze (since uv venvs lack a pip module).
-echo "[1/3] snapshotting env -> ${ENV_FILE}"
+echo "[1/4] snapshotting env -> ${ENV_FILE}"
 {
     echo "# bench env snapshot, captured $(date -Iseconds)"
     echo "# venv: replaced for privacy"

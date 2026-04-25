@@ -1,8 +1,23 @@
 # Changelog
 
-Local divergence from the `woct0rdho/SageAttention` fork this repo is
-based on. Format follows [Keep a Changelog](https://keepachangelog.com/).
-Semver only, no dates. `[Unreleased]` is the working state of `main`.
+Local divergence record for this fork. **Not a public release timeline**:
+this is a personal editable install used as an attention-kernel
+measurement surface for sm89 / RTX 40xx / Ada. The version blocks below
+are commit-history snapshots, not semver releases -- they group
+changes into coherent chunks for retrospective navigation. There are
+no compatibility promises across versions.
+
+Sections:
+
+- **Versions** -- additions and changes layered on top of the
+  upstream-from-woct0rdho baseline. Newest first.
+- **Known kernel bugs** -- factual record of real defects we've
+  measured in this fork's kernels. Start here if you're debugging
+  sage-attention-adjacent correctness problems.
+- **Backlog** -- real open TODOs with explicit triggers to act.
+- **Decision log** -- investigations that closed without action,
+  recorded so we don't re-derive them. Each entry has a reopen-trigger.
+- **Recurring process items** -- cron-like checks, not engineering work.
 
 ## Known kernel bugs
 
@@ -58,10 +73,10 @@ Discovered: 2026-04-23 via `tests/test_sageattn_ltx_shapes.py` (the
 seq_kv sweep exposes the rtol-vs-seq_kv scaling signature; an Explore
 pass confirmed the missing-feature root cause).
 
-## Open work
+## Backlog
 
-Fork-side TODOs. Each has an explicit trigger-to-act; we're not doing
-these speculatively.
+Real open TODOs. Each has an explicit trigger-to-act; we don't do these
+speculatively.
 
 ### Add mask support to the sm80/sm89 CUDA kernels
 
@@ -72,6 +87,11 @@ register-pressure regression verification).
 
 **Trigger to act:** triton's cross-attn perf becomes a measured
 bottleneck on a real production render (not speculatively).
+
+## Decision log
+
+Investigations that closed without action. Recorded so we don't
+re-derive them. Each entry has an explicit reopen-trigger.
 
 ### sm89 fp8 quantization scale: closed as no-action
 
@@ -158,6 +178,11 @@ improvement on Q (for a skewed model) yields ~8-10% end-to-end.
 - A future workload with shorter-bit Q quantization (fp4 or below)
   where per-block mean becomes a first-order win rather than a
   third-order refinement.
+
+## Recurring process items
+
+Cron-like checks; not engineering work. Each one has a frequency or
+trigger; act when the trigger fires, otherwise note in passing.
 
 ### Periodic upstream survey
 
@@ -251,130 +276,143 @@ existing JSONL rows.
 a sage-fork kernel push with data. Until then the raw JSONL is
 sufficient.
 
-## [Unreleased]
+## Versions
 
-### Added
+### v0.2.0 -- 2026-04-25  (bench instrumentation, image-shape split, telemetry tooling)
 
-- `tests/run_all.sh` -- one-shot validation runner. Resolves the venv
-  from `$VENV` or `$VIRTUAL_ENV`, snapshots the env to
-  `internal/bench_env_<today>.txt`, runs `tests/test_sageattn_ltx_shapes.py`
-  + `tests/spike_torch_compile.py` in sequence, archives both logs to
-  `internal/log/`, prints a one-line summary. `set -euo pipefail`.
-- `tests/test_sageattn_ltx_shapes.py` -- three bench instrumentation
-  additions:
-  * FlashInfer fp16 prefill row (optional; SKIPs cleanly when not installed).
-    Predicted to lag sage fp8++ on sm89 because CUTLASS lacks native fp8 below
-    sm90 -- this row is the empirical close-out for the question.
-  * SpargeAttention top-k=0.5 row on unmasked self-attn shapes only (sparge
-    inherits sage's mask gap, so masked shapes raise NotImplementedError at
-    the dispatcher; SKIPs when `spas_sage_attn` not installed).
-  * `image_gen_self_attn_4096_h24_d128` shape (Flux-1-dev-class: 4096 tokens,
-    24 heads, head_dim=128) added to SHAPES so the per-shape table now
-    confirms sage still wins on image-gen workloads, not just LTX
-    head_dim=64. First measurement: sage fp8++ 0.64ms vs torch_flash 1.31ms
-    (2.05x). Closes the "do we need a per-model-class router branch?"
-    question with a No.
-  * `z_image_turbo_self_attn_4608_h32_d120` shape (S3-DiT single-stream:
-    32 heads, head_dim=120 -- unusual, picked because 3840/32=120). Tests
-    that sage's CUDA kernels handle the non-power-of-2 head_dim. First
-    measurement: sage fp8++ 1.32ms vs torch_flash 2.23ms (2.73x SDPA,
-    1.69x torch_flash); fp16_triton 1.72ms (2.10x SDPA). All sage modes
-    ran cleanly on head_dim=120 -- no per-model branch needed for
-    Z-Image-Turbo specifically.
-- `internal/bench_env_2026-04-25.txt` -- env snapshot
-  (torch 2.11.0+cu130, triton 3.6.0, sage editable, RTX 4090 / sm89, CUDA 13.0)
-  locking the version surface so later phase deltas are real perf changes.
-- `build.sh` -- local build wrapper that targets whichever venv is
-  active via `VIRTUAL_ENV`, pins `uv pip install --python
-  ${VIRTUAL_ENV}/bin/python`, compiles for Ampere + Ada
-  (`TORCH_CUDA_ARCH_LIST=8.0;8.6;8.9`) by default, and verifies the
-  built `.so`s. Caps `MAX_JOBS` at 8 to keep high-core boxes from
-  OOMing during `_qattn_sm89` compilation.
-- `tests/test_sageattn_ltx_shapes.py` -- measures each installed sage
-  kernel and three torch SDPA backends (`FLASH_ATTENTION`,
-  `EFFICIENT_ATTENTION`, `CUDNN_ATTENTION`) against a common reference
-  at LTX-2.3's actual shapes (head_dim=64, heads=32, self-attn +
-  cross-attn-with-mask across seq_kv from 32 to 1024, plus a synthetic
-  wide-V shape). Reports mean/max rtol+atol and median elapsed per
-  (shape, mode). Soft-warns when mean_rtol exceeds the fork README's
-  "<0.1 on RTX 40xx/50xx" expectation. The torch-backend rows serve as
-  a regression test for future torch releases -- if a torch update
-  closes the sage speedup gap this test will say so.
-  First-measurement datapoints on RTX 4090 / CUDA 13.2 / torch 2.11 / bf16:
-    - self-attn-large (31776x31776, no mask): sage fp8++ 19.67 ms,
-      torch_flash 52.39 ms (2.7x slower), torch_cudnn ~360 ms (cuDNN's
-      FA3 path is not competitive on sm89).
-    - cross-attn + mask (kv=226): sage fp16_triton 0.78 ms, torch_flash
-      SKIP (rejects 4D bool mask), torch_cudnn 2.20 ms (2.8x slower).
-  Conclusion: sage remains load-bearing on sm89; the
-  torch-SDPA-could-displace-sage scenario is retired by measurement.
-  Companion to the one-shape `tests/test_sageattn.py`.
-  Also reports a `fp8++vs.triton` cross-kernel consistency row on
-  unmasked shapes: a mask-aware consumer mixes fp8++ (unmasked) and
-  triton (masked) in one forward pass, so measuring their pairwise
-  rtol tells us whether that mixing introduces a secondary numerical
-  issue beyond each kernel's independent noise floor. Measured on RTX
-  4090: mean_rtol ~0.10 across self-attn shapes -- essentially equal
-  to the combined-noise floor (triton ~0.04 + fp8++ ~0.09 vs SDPA,
-  added in quadrature). No hidden discontinuity; mixing is safe.
-- `tests/repros/repro_cuda_mask_kernel.py` -- standalone repro for the
-  CUDA mask-path missing-feature documented in Known kernel bugs.
-- `CHANGELOG.md` -- this file.
-- `CLAUDE.md` -- fork navigation guide.
+A coherent chunk of measurement-surface work: the LTX-shape harness gained
+FlashInfer + SpargeAttention rows, the image-gen shapes split into their
+own file, the torch.compile spike got a re-runnable script with a clean
+verdict, and the one-shot runner `tests/run_all.sh` ties it all together.
+Conventions tightened: consumer-agnostic framing rule, project-internal
+phase numbers don't ship, path-privacy hooks installed.
 
-### Changed (kernel internals)
+#### Added
 
+- `tests/run_all.sh` -- one-shot validation runner. Resolves the venv from
+  `$VENV` or `$VIRTUAL_ENV`, snapshots the env to
+  `internal/bench_env_<today>.txt`, runs the LTX bench, the image bench,
+  and the torch.compile spike in sequence; archives logs under
+  `internal/log/`. `set -euo pipefail`.
+- `tests/test_sageattn_image_shapes.py` -- companion to
+  `test_sageattn_ltx_shapes.py`, holds head_dim ∈ {120, 128} shapes
+  (Z-Image-Turbo S3-DiT, Flux-class). Reuses the LTX file's
+  `run_shape_sweep()` helper; ~50 lines.
+- `tests/test_sageattn_ltx_shapes.py` -- new bench rows on top of v0.1.0:
+  * FlashInfer fp16 prefill row (optional; SKIPs cleanly when not
+    installed). Predicted to lag sage fp8++ on sm89 because CUTLASS
+    lacks native fp8 below sm90.
+  * SpargeAttention top-k=0.5 row on unmasked self-attn shapes only
+    (Sparge inherits sage's mask gap; SKIPs when `spas_sage_attn` not
+    installed).
+  * `run_shape_sweep(shapes)` extracted as the per-shape engine so
+    `test_sageattn_image_shapes.py` reuses it without duplicating
+    ~85 lines of scaffolding.
+- `tests/spike_torch_compile.py` -- re-runnable spike measuring whether
+  `torch.compile` around sage produces bounded mean-rel-error AND
+  speedup. Verdict on torch 2.11: keep the consumer-side
+  `torch.compiler.disable()`. Both compile modes drift ~2.8% vs eager,
+  consistent across modes (autocast or op fusion around sage's int8/fp8
+  dispatch). Reopen-trigger: "compile produces bounded rtol AND a
+  measurable speedup" on a future torch release.
+- `internal/bench_env_2026-04-25.txt` -- env snapshot (torch
+  2.11.0+cu130, triton 3.6.0, sage editable, RTX 4090 / sm89, CUDA 13.0)
+  locking the version surface so later phase deltas are real perf
+  changes.
+
+#### Measured
+
+First-measurement datapoints on RTX 4090 / CUDA 13.0 / torch 2.11 /
+bf16, captured during this version's work:
+
+- **self-attn-large** (31776×31776, head_dim=64, no mask): sage fp8++
+  19.95 ms, torch_flash 52.23 ms (2.62x), torch_cudnn 53.98 ms (2.72x).
+  ~1.4% drift from the v0.1.0 baseline of 19.67 ms (cu128 -> cu130 +
+  triton 3.6 upgrade); within run-to-run noise. Yardstick is now
+  19.95 ms.
+- **image_gen 4096×4096 h24 d128** (Flux-class): sage fp8++ 0.64 ms vs
+  torch_flash 1.31 ms (2.05x). Closes the "do we need a per-model-class
+  router branch?" question with a no.
+- **z_image_turbo 4608×4608 h32 d120** (S3-DiT single-stream): sage
+  fp8++ 1.32 ms vs torch_flash 2.23 ms (1.69x). Confirms sage's CUDA
+  kernels handle the non-power-of-2 head_dim=120 cleanly.
+- **cross-attn + mask** rtol fingerprints (CUDA-mask-bug signature)
+  unchanged from v0.1.0.
+
+#### Changed
+
+- `README.md` and `CLAUDE.md` -- reframed to be consumer-agnostic. Sage
+  is a general PyTorch attention library; the fork compiles cleanly
+  into any consumer. README now lists what's in the fork beyond the
+  upstream (bench harness, compile spike, warmup API, autotune
+  addition); CLAUDE.md TLDR states the two purposes (editable install
+  + experimentation/measurement surface). Conventions added: consumer-
+  agnostic framing in committed material, project-internal phase
+  numbers don't ship, path discipline enforced by the path-privacy
+  plugin's pre-commit hook.
+
+### v0.1.0 -- 2026-04-23  (post-squash baseline)
+
+Initial fork divergence from `woct0rdho/SageAttention` after the
+history squash. Everything below is what makes this fork different
+from upstream as of the squash commit.
+
+#### Added
+
+- `setup.py` -- `_qattn_sm80` is now built when compute capability 8.9
+  (Ada) is detected. Framed as a regression fix from
+  `woct0rdho/SageAttention`: thu-ml's setup.py gates the SM80 extension
+  on `HAS_SM80 or HAS_SM86 or HAS_SM89 or HAS_SM90 or HAS_SM100 or
+  HAS_SM120 or HAS_SM121` (Ampere + Ada + Hopper + Blackwell), but
+  woct0rdho's refactor collapsed that to a tuple gate `("8.0", "8.6",
+  "8.7")` -- which silently drops Ada, Hopper, AND Blackwell.
+  Ada-only source builds on woct0rdho's fork lose
+  `sageattn_qk_int8_pv_fp16_cuda` (the fp16 fallback). We added `"8.9"`
+  because that's the arch we test and care about; widen the tuple to
+  match thu-ml's coverage if you run this fork on Hopper or Blackwell
+  and want the fp16 fallback built from source.
+- `sageattention/core.py::sageattn_warmup(shapes, kernels=...)` --
+  public API that fires one-shot dispatches per (kernel, shape) to
+  prime Triton's JIT + autotune cache. Cuts ~1s first-call latency on
+  sm89 to ~2ms post-warm. Defaults to the Triton kernel only (CUDA
+  kernels are build-time compiled, no warmup benefit).
 - `sageattention/triton/attn_qk_int8_per_block.py` -- added
   `@triton.autotune` over `num_warps in {4, 8}` and
   `num_stages in {3, 4, 5}`, keyed on runtime shape. BLOCK_M/BLOCK_N
   stay hardcoded because they're locked by the per-block int8
-  quantization step in `sageattention/quant.py` (changing them
-  without matched quant changes would misalign scale tables).
-  Measurement on RTX 4090 / LTX shapes: autotune confirms the existing
-  hardcoded config (`num_warps=4`, `num_stages=3` for `head_dim=64`)
-  was already at the optimum -- zero perf delta today. Value is
-  structural (auto-adapts to future kernel changes, triton upgrades,
-  or new shapes; catches regressions automatically).
+  quantization step in `sageattention/quant.py`. Measurement on RTX
+  4090 / LTX shapes: autotune confirmed the existing hardcoded config
+  (`num_warps=4`, `num_stages=3` for `head_dim=64`) was already at the
+  optimum -- zero perf delta then. Value is structural: auto-adapts to
+  future kernel / triton / shape shifts.
+- `build.sh` -- editable-install wrapper. Enforces `VIRTUAL_ENV`, pins
+  `uv pip install --python ${VIRTUAL_ENV}/bin/python`, compiles for
+  Ampere + Ada (`TORCH_CUDA_ARCH_LIST=8.0;8.6;8.9`) by default. Caps
+  `MAX_JOBS` at 8 to keep high-core boxes from OOMing during
+  `_qattn_sm89` compilation.
+- `tests/test_sageattn_ltx_shapes.py` -- LTX-2.3-shape accuracy and
+  speed harness. Measures every installed sage kernel and three torch
+  SDPA backends against `SDPBackend.EFFICIENT_ATTENTION` at LTX's
+  actual shapes (head_dim=64, heads=32, self-attn + cross-attn-with-
+  mask across seq_kv from 32 to 1024, plus a synthetic wide-V shape).
+  Reports mean/max rtol+atol and median elapsed. Soft-warns when
+  mean_rtol > 0.10. Cross-kernel `fp8++vs.triton` consistency row on
+  unmasked shapes: mean_rtol ~0.10 across self-attn shapes, equal to
+  the combined-noise floor (triton ~0.04 + fp8++ ~0.09 vs SDPA, added
+  in quadrature). No hidden discontinuity; mixing is safe.
+  First-measurement datapoints (RTX 4090 / CUDA 13.2 / torch 2.11 /
+  bf16): self-attn-large (31776×31776, no mask) sage fp8++ 19.67 ms vs
+  torch_flash 52.39 ms (2.7x), torch_cudnn ~360 ms (cuDNN FA3 path not
+  competitive on sm89); cross-attn + mask (kv=226) sage fp16_triton
+  0.78 ms vs torch_cudnn 2.20 ms (2.8x). Sage remains load-bearing on
+  sm89.
+- `tests/repros/repro_cuda_mask_kernel.py` -- standalone repro for the
+  CUDA mask-path missing-feature documented in Known kernel bugs.
+- `CHANGELOG.md`, `CLAUDE.md` -- this file plus the fork navigation
+  guide.
 
-### Changed
+#### Changed
 
-- `README.md` and `CLAUDE.md` -- reframed to be consumer-agnostic.
-  Sage is a general PyTorch attention library; this fork compiles
-  cleanly into any consumer (ComfyUI custom nodes via KJNodes,
-  diffusers pipelines, raw PyTorch). README now lists what's actually
-  in the fork beyond the upstream (bench harness, compile spike,
-  warmup API, autotune addition); CLAUDE.md TLDR states the two
-  purposes (editable install + experimentation/measurement surface)
-  without coupling to a specific downstream node.
-- Self-attn-large baseline drift: 19.67 ms (recorded 2026-04-23 on torch+cu128)
-  to 19.95 ms (2026-04-25 on torch+cu130). ~1.4% drift, within run-to-run
-  noise. Going forward the regression yardstick is 19.95 ms. Other shapes
-  drifted by similar magnitudes; cross-attn rtol fingerprints
-  (CUDA-mask-bug signature) are unchanged from prior characterization.
-- `tests/spike_torch_compile.py` -- re-runnable spike measuring whether
-  a consumer's `torch.compiler.disable()` wrapper around sage is still
-  warranted on the current torch version. Both `mode='reduce-overhead'` (CUDA Graphs)
-  and `mode='default'` (inductor without CUDA Graphs) compiled cleanly
-  but produced output with mean_rtol 0.0279 vs eager -- 2.8% drift, well
-  above the 1% tolerance. Verdict: keep the disable. The 2.8% drift is
-  consistent across both modes which suggests compile is mutating an
-  intermediate (likely autocast or op fusion around sage's int8/fp8
-  dispatch) regardless of CUDA Graphs. Re-run the spike on future torch
-  releases; the disable's reopen-trigger is "compile produces bounded
-  rtol AND a measurable speedup."
-- `setup.py` -- `_qattn_sm80` is now also built when compute
-  capability 8.9 (Ada) is detected. Framed as a regression fix from
-  `woct0rdho/SageAttention`: thu-ml's setup.py gates the SM80
-  extension on `HAS_SM80 or HAS_SM86 or HAS_SM89 or HAS_SM90 or
-  HAS_SM100 or HAS_SM120 or HAS_SM121` (Ampere + Ada + Hopper +
-  Blackwell), but woct0rdho's refactor collapsed that to a tuple
-  gate `("8.0", "8.6", "8.7")` — which silently drops Ada, Hopper,
-  AND Blackwell. Ada-only source builds on woct0rdho's fork lose
-  `sageattn_qk_int8_pv_fp16_cuda` (the fp16 fallback path); Hopper
-  and Blackwell source builds lose it too. We only added `"8.9"`
-  because that's the arch we test and care about here — if you run
-  this fork on Hopper or Blackwell and want the fp16 fallback built
-  from source, widen the tuple to match thu-ml's coverage.
 - `README.md` -- reduced to attribution only (immediate fork:
   `woct0rdho/SageAttention`; original: `thu-ml/SageAttention`) plus a
   short build pointer. Windows-specific installation prose and wheel

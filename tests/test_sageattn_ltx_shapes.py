@@ -265,21 +265,20 @@ def print_header(label_width: int):
           f"{'mean_atol':>10}  {'max_atol':>10}  {'median_ms':>10}  speed_x")
 
 
-def main():
-    if not torch.cuda.is_available():
-        print("CUDA not available -- this test measures kernel numerics on-GPU.")
-        return
-
+def run_shape_sweep(shapes: list[Shape], dtype: torch.dtype = torch.bfloat16) -> list[str]:
+    """Run the per-shape table for any list of Shape entries. Returns a
+    list of soft-warning strings (mean_rtol > 0.10 entries) so the caller
+    can format the footer however it wants. The image-shape file reuses
+    this entry point with its own SHAPES list."""
     label_width = max(
         len(spec[0]) for spec in
         (*MODE_SPECS, *TORCH_MODE_SPECS, *FLASHINFER_MODE_SPECS, *SPARGE_MODE_SPECS)
     )
     print_header(label_width)
 
-    dtype = torch.bfloat16
     warnings: list[str] = []
 
-    for shape in SHAPES:
+    for shape in shapes:
         print()
         print(f"=== {shape.name} ===")
         print(
@@ -370,6 +369,12 @@ def main():
         # as sage modes is fine.
         _run_aux(SPARGE_MODE_SPECS, dispatch_sparge, warn_rtol=True)
 
+    return warnings
+
+
+def print_warnings_footer(warnings: list[str]) -> None:
+    """Print the standard soft-warnings footer. Image-shape file uses the
+    same footer so the two scripts read identically at the bottom."""
     print()
     if warnings:
         print(f"Soft warnings ({len(warnings)}): mean_rtol > 0.10 on:")
@@ -379,6 +384,13 @@ def main():
               "diverges, not to gate on a number.")
     else:
         print("All (shape, mode) pairs: mean_rtol <= 0.10.")
+
+
+def main():
+    if not torch.cuda.is_available():
+        print("CUDA not available -- this test measures kernel numerics on-GPU.")
+        return
+    print_warnings_footer(run_shape_sweep(SHAPES))
 
 
 if __name__ == "__main__":
