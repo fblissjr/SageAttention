@@ -662,6 +662,13 @@ model becomes a goal.
   Mirrors CHANGELOG's Backlog and Recurring sections in active
   form. Pairs with `internal/log/log_<date>.md` (narrative session
   notes) and `internal/audit_<date>.md` (durable findings).
+- `.claude.local.md` (gitignored) -- personal companion to this
+  file. Holds the specific local-machine details that would leak in
+  committed material: active venv path, consumer-install location,
+  the `coderef/` symlink targets. May not exist on a fresh clone;
+  that's by design. When this CLAUDE.md says "use `${VIRTUAL_ENV}`"
+  or "`coderef/` is symlinks to consumer source," `.claude.local.md`
+  is where the specific values live.
 - A downstream ComfyUI consumer (any custom node patching attention)
   owns routing policy, tracing telemetry, and workflow integration.
   Sage-fork stays primitive: kernels and the bench harness only.
