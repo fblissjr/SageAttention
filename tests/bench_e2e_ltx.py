@@ -42,11 +42,24 @@ Prerequisites
   environment, so the consumer's tracer wrote a JSONL file. Without
   this, the bench falls back to wall-time-only output (no
   attention-fraction).
-- The workflow is in API format (UI: Workflow -> Save (API Format)).
-  This script does NOT convert UI-format workflows. UI format lacks
-  the per-node input bindings the API needs; the conversion is
-  JS-side in ComfyUI's frontend and reimplementing it adds enough
-  complexity that we'd rather you click the export button once.
+- Sage trace path resolution -- two modes:
+    1. RUN_ID mode (preferred, post the consumer's Phase 1b): launch
+       ComfyUI via `start_experiment.sh` so RUN_ID is set, then pass
+       `--run-id <RUN_ID>` (or set $RUN_ID in the bench's shell).
+       The bench reads `coderef/.../data/runs/${RUN_ID}/sage.jsonl`
+       directly.
+    2. Legacy mode (fallback): no run-id resolved -> the bench globs
+       `coderef/.../internal/analysis/runs/sage/sage_*.jsonl` and
+       picks the newest. Brittle if anything else writes there
+       concurrently; use --inter-run-sleep to disambiguate run
+       boundaries.
+- The workflow is in API format. Two ways to produce one:
+    1. UI: Workflow -> Save (API Format).
+    2. Read it back from any recent VHS-output PNG via the consumer's
+       `scripts/extract_workflow_from_png.py --prompt`. Avoids
+       opening the UI entirely.
+  This script does NOT convert UI-format workflow JSON; that
+  conversion is JS-side in ComfyUI's frontend.
 - The workflow contains a node with class_type
   AudioLoopHelperSageAttention (the consumer's first-party node).
   The bench finds it by class_type, not node id, so it works across
@@ -120,12 +133,45 @@ SPEEDUP_WASH_FLOOR = 0.95    # >= : noise band; below = real regression
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LOCAL_CONFIG_PATH = REPO_ROOT / "internal" / "local_config.json"
 
-# Where the consumer's tracer writes JSONL when AUDIOLOOPHELPER_SAGE_TRACE=auto.
-# Resolved from sage-fork's repo root via the gitignored coderef/ symlink/copy.
-# Override with --trace-dir if your consumer install is elsewhere.
-DEFAULT_TRACE_DIR = (
-    REPO_ROOT / "coderef" / "ComfyUI-AudioLoopHelper" / "internal" / "analysis" / "runs" / "sage"
-)
+# Consumer install root (gitignored coderef/ symlink). Holds both the
+# legacy trace dir and the new RUN_ID-keyed data/runs/ tree.
+CONSUMER_ROOT = REPO_ROOT / "coderef" / "ComfyUI-AudioLoopHelper"
+
+# Legacy path -- where the consumer's tracer wrote JSONL before its
+# Phase 1b RUN_ID propagation landed (their commit 1f6b830). Used as
+# fallback when no RUN_ID is resolved.
+LEGACY_TRACE_DIR = CONSUMER_ROOT / "internal" / "analysis" / "runs" / "sage"
+
+# RUN_ID-keyed path. When ComfyUI was launched with RUN_ID set
+# (per the consumer's start_experiment.sh), the tracer writes here.
+# `${run_id}` placeholder filled at resolution time.
+RUN_ID_TRACE_TEMPLATE = CONSUMER_ROOT / "data" / "runs" / "{run_id}" / "sage.jsonl"
+
+
+def resolve_run_id(cli_run_id: str | None) -> str | None:
+    """CLI > env. None means "legacy glob path"."""
+    if cli_run_id:
+        return cli_run_id
+    env_run_id = os.environ.get("RUN_ID", "").strip()
+    return env_run_id or None
+
+
+def resolve_trace_path(run_id: str | None, legacy_trace_dir: Path) -> Path | None:
+    """Return the sage trace JSONL path. Strategy:
+
+    - If RUN_ID resolved: return the deterministic per-run file
+      (`data/runs/${run_id}/sage.jsonl`). Caller checks existence;
+      missing-file is the operator's signal that the trace env var
+      wasn't set or the run hasn't started.
+    - Otherwise: glob the legacy dir and return the most recent
+      `sage_*.jsonl` (pre-Phase-1b behavior). None if the dir is
+      empty or missing.
+    """
+    if run_id is not None:
+        return Path(str(RUN_ID_TRACE_TEMPLATE).format(run_id=run_id))
+    if not legacy_trace_dir.is_dir():
+        return None
+    return max(legacy_trace_dir.glob("sage_*.jsonl"), default=None)
 
 
 def _load_local_config() -> dict:
@@ -255,12 +301,6 @@ def set_sage_mode(prompt: dict, mode: str) -> dict:
 # ---------------------------------------------------------------------------
 # Sage trace JSONL
 # ---------------------------------------------------------------------------
-
-def latest_trace_file(trace_dir: Path) -> Path | None:
-    if not trace_dir.is_dir():
-        return None
-    candidates = sorted(trace_dir.glob("sage_*.jsonl"))
-    return candidates[-1] if candidates else None
 
 
 def sum_attn_us_in_window(trace_path: Path, ts_min: float, ts_max: float) -> tuple[int, float]:
@@ -422,13 +462,20 @@ def main() -> int:
                          help=f"Sage mode for the on-arm (default: {DEFAULT_SAGE_MODE}).")
     parser.add_argument("--baseline-mode", default=DEFAULT_BASELINE_MODE,
                          help=f"Sage mode for the off-arm (default: {DEFAULT_BASELINE_MODE}).")
-    parser.add_argument("--trace-dir", type=Path, default=DEFAULT_TRACE_DIR,
-                         help=f"Where the sage tracer JSONL lives (default: {DEFAULT_TRACE_DIR}).")
+    parser.add_argument("--run-id", default=None,
+                         help="ComfyUI session run-id (consumer's Phase 1b). If set, the bench reads "
+                              "the per-run sage trace at coderef/.../data/runs/<RUN_ID>/sage.jsonl. "
+                              "Falls back to $RUN_ID env var, else the legacy glob path.")
+    parser.add_argument("--trace-dir", type=Path, default=LEGACY_TRACE_DIR,
+                         help=f"Legacy fallback path (pre-Phase-1b). Used only when no run-id "
+                              f"resolves. Default: {LEGACY_TRACE_DIR}.")
     parser.add_argument("--inter-run-sleep", type=float, default=1.0,
-                         help="Seconds to sleep between runs (helps disambiguate trace ts windows).")
+                         help="Seconds to sleep between runs (helps disambiguate trace ts windows "
+                              "in legacy-glob mode; ignored when run-id resolves).")
     args = parser.parse_args()
 
     host = resolve_host(args.host)
+    run_id = resolve_run_id(args.run_id)
 
     if not args.workflow.is_file():
         print(f"ERROR: workflow not found: {args.workflow}", file=sys.stderr)
@@ -468,13 +515,18 @@ def main() -> int:
         print(f"ERROR: ComfyUI not reachable at http://{host}: {exc}", file=sys.stderr)
         return 1
 
-    trace_path_before = latest_trace_file(args.trace_dir)
-    if trace_path_before is None:
+    trace_path_before = resolve_trace_path(run_id, args.trace_dir)
+    if run_id is not None:
+        print(f"run-id:     {run_id}")
+        print(f"trace file: {trace_path_before}"
+              + ("" if trace_path_before and trace_path_before.is_file()
+                 else "  (does not exist yet -- will be written when first sage call fires)"))
+    elif trace_path_before is None:
         print(f"WARN: no sage trace file found in {args.trace_dir}.")
         print( "      Either ComfyUI was launched without AUDIOLOOPHELPER_SAGE_TRACE=auto,")
         print( "      or the consumer's tracer hasn't written yet. Bench will report wall-time only.")
     else:
-        print(f"trace file: {trace_path_before}")
+        print(f"trace file (legacy): {trace_path_before}")
     print()
 
     # Run interleaved (on / off / on / off / ...) so that wall-time bias from
@@ -488,8 +540,9 @@ def main() -> int:
         results_off.append(run_one(host, prompt, args.baseline_mode, run_idx, client_id))
         time.sleep(args.inter_run_sleep)
 
-    # Re-resolve in case ComfyUI restarted mid-bench and rotated the file.
-    trace_path = latest_trace_file(args.trace_dir) if args.trace_dir.is_dir() else None
+    # In RUN_ID mode the path is deterministic; in legacy mode we
+    # re-glob in case ComfyUI restarted mid-bench and rotated the file.
+    trace_path = resolve_trace_path(run_id, args.trace_dir)
     attach_attn_times(results_on, trace_path)
     report(results_on, results_off, trace_path)
     return 0
