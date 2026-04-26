@@ -13,14 +13,11 @@ Local fork of `woct0rdho/SageAttention` (itself a fork of
    load-bearing reason this fork exists at all.
 2. **Experimentation and measurement surface** for sm89 attention
    kernel decisions. The LTX-shape bench harness
-   (`tests/test_sageattn_ltx_shapes.py`), torch.compile spike, and
-   periodic upstream survey live here so kernel-side decisions
-   (autotune coverage, mask-kernel work, FlashInfer / SpargeAttn
-   comparisons) can be made with numbers. Consumers handle their own
-   routing policy; the fork stays primitive (kernels + bench).
-
-History was squashed at 2026-04-23: assume `main` is ours; upstream is
-not pulled from anymore.
+   (`tests/test_sageattn_ltx_shapes.py`) and torch.compile spike
+   live here so kernel-side decisions (autotune coverage,
+   mask-kernel work, FlashInfer / SpargeAttn comparisons) can be
+   made with numbers. Consumers handle their own routing policy; the
+   fork stays primitive (kernels + bench).
 
 We care about exactly one GPU: **sm89 / RTX 40xx / Ada**. Other archs
 compile and run (the code is upstream's), but we don't test or debug

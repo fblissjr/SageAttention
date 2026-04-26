@@ -203,51 +203,6 @@ improvement on Q (for a skewed model) yields ~8-10% end-to-end.
 Cron-like checks; not engineering work. Each one has a frequency or
 trigger; act when the trigger fires, otherwise note in passing.
 
-### Periodic upstream survey
-
-We squashed history and are no longer tracking either upstream
-(`thu-ml/SageAttention` or `woct0rdho/SageAttention`) as a remote. The
-two meaningful risks that creates:
-
-1. thu-ml lands a kernel bugfix via PR and we don't notice.
-2. woct0rdho ships a future regression (probably in Windows-focused
-   work) that silently drifts us if we ever cherry-pick from them.
-
-**What to do (quarterly, ~15 min):**
-
-```bash
-# scratch checkout
-cd /tmp && rm -rf sage-survey-thuml sage-survey-woct && \
-  git clone --depth 50 --quiet https://github.com/thu-ml/SageAttention sage-survey-thuml && \
-  git clone --depth 50 --quiet https://github.com/woct0rdho/SageAttention sage-survey-woct
-
-# skim recent commits
-git -C /tmp/sage-survey-thuml log --oneline --since="3 months ago"
-git -C /tmp/sage-survey-woct  log --oneline --since="3 months ago"
-
-# diff the surfaces we care about against our tree (run from sage-fork repo root)
-diff -qr /tmp/sage-survey-thuml/sageattention ./sageattention
-diff -qr /tmp/sage-survey-thuml/csrc          ./csrc
-diff -qr /tmp/sage-survey-woct/sageattention  ./sageattention
-diff -qr /tmp/sage-survey-woct/csrc           ./csrc
-```
-
-Look for: new `.cu`/`.cuh` fixes (especially in `qattn/`, `fused/`,
-`utils.cuh`), `core.py` dispatch logic changes, setup.py arch-gate
-changes. Ignore: Windows/sm75/sm87-specific changes, sage3 Blackwell
-reorganization, README/example updates.
-
-Baseline comparison as of 2026-04-24 (at squash time): woct0rdho's
-core.py had meaningful improvements over thu-ml (CUDA-version-gated
-fp8++ dispatch, `torch.version.cuda` detection, `_cuda_archs` cache)
-that we kept. thu-ml had nothing we wanted. Future surveys should
-diff against this snapshot, not re-derive the full picture.
-
-**Trigger to act:** a kernel-side `.cu`/`.cuh` diff appears that
-looks like a bugfix on a path we use (sm80/sm89 qattn kernels,
-fused ops, attn_utils). Everything else: note in the next survey,
-keep moving.
-
 ### Bench env re-snapshot
 
 Process item, not engineering work. The `tests/test_sageattn_ltx_shapes.py`

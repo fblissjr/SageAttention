@@ -2,25 +2,21 @@ last updated: 2026-04-26
 
 # SageAttention (sm89 fork)
 
-A personal fork of [woct0rdho/SageAttention](https://github.com/woct0rdho/SageAttention)
-(itself a fork of [thu-ml/SageAttention](https://github.com/thu-ml/SageAttention))
-that exists to do two things:
+A 4090 / Ada attention-kernel optimization repo for **DiT-class
+local generation**: LTX 2.3 video, Flux-class image (Flux 2 Klein
+and predecessors), Z-Image-Turbo S3-DiT. The kernel base is sage
+attention (originally [thu-ml](https://github.com/thu-ml/SageAttention),
+forked through [woct0rdho](https://github.com/woct0rdho/SageAttention));
+the bench harness measures sage variants alongside SpargeAttention,
+FlashInfer, and torch SDPA at the actual shapes our models run.
 
-1. Make sage build cleanly from source on RTX 40xx / Ada (sm89), which
-   woct0rdho's `setup.py` refactor accidentally broke.
-2. Serve as a measurement surface for sm89 attention — a place to
-   characterize accuracy and speed on real model shapes (LTX-2.3,
-   Flux-class, Z-Image-Turbo) before any kernel-side decision lands.
-
-The kernels themselves are upstream's. We measure on sm89 / RTX 4090
-only; other archs compile and run but are not validated here.
-
-For the high-level scope statement (what this fork is, what it
-isn't, the single metric, what we might be wrong about), see
-[`VISION.md`](./VISION.md). For the operational philosophy and
-day-to-day perf-research framework, see
-[`CLAUDE.md`](./CLAUDE.md) "Performance research: the load-bearing
-metric."
+This README covers what changed vs the upstream codebase, what we
+measured, and what tradeoffs come with using it. For the high-level
+scope statement — what this repo is, what it isn't, the single
+metric, what `rtol` means and why 0.10 is the line, what we might
+be wrong about — see [`VISION.md`](./VISION.md). For the day-to-day
+perf-research framework, see [`CLAUDE.md`](./CLAUDE.md)
+"Performance research: the load-bearing metric."
 
 ## Build
 
@@ -265,8 +261,8 @@ responsibility. Sage-fork stays primitive.
 
 - [`CHANGELOG.md`](./CHANGELOG.md) — version-by-version divergence,
   Known kernel bugs, Backlog with explicit triggers to act, Decision
-  log of investigations that closed without action, Recurring process
-  items (quarterly upstream survey, bench env re-snapshot).
+  log of investigations that closed without action, Recurring
+  process items.
 - [`CLAUDE.md`](./CLAUDE.md) — fork navigation guide and conventions.
 - [`tests/test_sageattn_ltx_shapes.py`](./tests/test_sageattn_ltx_shapes.py)
   — LTX-shape accuracy + speed harness. Measures every installed sage
