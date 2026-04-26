@@ -34,7 +34,10 @@ bottleneck." If > 1.5, sage is load-bearing on this workload.
 
 Prerequisites
 -------------
-- ComfyUI is running and reachable (default 127.0.0.1:8188).
+- ComfyUI is running and reachable. Host is resolved from (in order):
+  --host CLI arg, $COMFYUI_HOST env var, or `internal/local_config.json`
+  (key: comfyui_host). No hardcoded default -- if none of those
+  resolve, the bench errors out with a pointer to the runbook.
 - ComfyUI was launched with AUDIOLOOPHELPER_SAGE_TRACE=auto in the
   environment, so the consumer's tracer wrote a JSONL file. Without
   this, the bench falls back to wall-time-only output (no
@@ -51,15 +54,15 @@ Prerequisites
 
 Usage
 -----
-    # One-time setup (consumer side):
-    # 1. Launch ComfyUI with: AUDIOLOOPHELPER_SAGE_TRACE=auto
-    # 2. In the ComfyUI UI, load your LTX workflow
-    # 3. Workflow -> Save (API Format) -> save as something.api.json
+    # See internal/runbook_bench_e2e_ltx.md for the operational runbook,
+    # including the one-time UI export step and the local_config.json
+    # schema.
 
-    # Then:
-    /path/to/venv/bin/python tests/bench_e2e_ltx.py \\
-        --workflow /path/to/something.api.json \\
-        --runs 3
+    # Once ComfyUI is running and the workflow is saved as API format:
+    python tests/bench_e2e_ltx.py --workflow /path/to/workflow.api.json --runs 3
+
+    # Override host (otherwise resolved from env or internal/local_config.json):
+    python tests/bench_e2e_ltx.py --host <host:port> --workflow ... --runs 3
 
 What's measured per arm
 -----------------------
@@ -82,6 +85,7 @@ What's deliberately NOT measured here
 from __future__ import annotations
 
 import argparse
+import os
 import statistics
 import sys
 import time
@@ -94,20 +98,69 @@ import orjson
 
 
 # Defaults documented inline so an operator running with `--help` sees
-# the canonical values without reading source.
-DEFAULT_HOST = "127.0.0.1:8188"
+# the canonical values without reading source. Host has no default --
+# resolved from CLI / env / config file; see resolve_host().
 DEFAULT_RUNS = 3
 DEFAULT_SAGE_MODE = "auto_mask_aware"
 DEFAULT_BASELINE_MODE = "disabled"
 SAGE_NODE_CLASS = "AudioLoopHelperSageAttention"
 
+# Local-config file (gitignored). Lets an operator pin host / workflow
+# paths once on this box without committing them. See
+# internal/runbook_bench_e2e_ltx.md for the schema.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+LOCAL_CONFIG_PATH = REPO_ROOT / "internal" / "local_config.json"
+
 # Where the consumer's tracer writes JSONL when AUDIOLOOPHELPER_SAGE_TRACE=auto.
 # Resolved from sage-fork's repo root via the gitignored coderef/ symlink/copy.
 # Override with --trace-dir if your consumer install is elsewhere.
 DEFAULT_TRACE_DIR = (
-    Path(__file__).resolve().parent.parent
-    / "coderef" / "ComfyUI-AudioLoopHelper" / "internal" / "analysis" / "runs" / "sage"
+    REPO_ROOT / "coderef" / "ComfyUI-AudioLoopHelper" / "internal" / "analysis" / "runs" / "sage"
 )
+
+
+def _load_local_config() -> dict:
+    """Read internal/local_config.json if it exists. Returns {} if not.
+
+    Gitignored on purpose -- holds local-machine paths and host info
+    we don't want in committed material. Missing file is fine (CLI args
+    or env vars are the alternatives); malformed file is a hard error
+    so silent typos don't fall through to "default behavior" surprises.
+    """
+    if not LOCAL_CONFIG_PATH.is_file():
+        return {}
+    try:
+        return orjson.loads(LOCAL_CONFIG_PATH.read_bytes())
+    except orjson.JSONDecodeError as exc:
+        raise SystemExit(
+            f"ERROR: {LOCAL_CONFIG_PATH} exists but is not valid JSON: {exc}\n"
+            f"       See internal/runbook_bench_e2e_ltx.md for the schema."
+        )
+
+
+def resolve_host(cli_host: str | None) -> str:
+    """Resolve the ComfyUI host from CLI > env > local_config.json.
+
+    Hard-error with a runbook pointer if none of the three resolves --
+    we don't want to fall back to a hardcoded value that might silently
+    point at the wrong box.
+    """
+    if cli_host:
+        return cli_host
+    env_host = os.environ.get("COMFYUI_HOST", "").strip()
+    if env_host:
+        return env_host
+    cfg_host = _load_local_config().get("comfyui_host")
+    if cfg_host:
+        return cfg_host
+    raise SystemExit(
+        "ERROR: ComfyUI host is not configured. Set ONE of:\n"
+        "  --host <host:port>                       (per-invocation)\n"
+        "  export COMFYUI_HOST=<host:port>          (per-shell)\n"
+        f"  echo '{{\"comfyui_host\": \"<host:port>\"}}' > {LOCAL_CONFIG_PATH}"
+        "  (per-checkout, gitignored)\n"
+        "See internal/runbook_bench_e2e_ltx.md for the full setup."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -358,8 +411,9 @@ def main() -> int:
     )
     parser.add_argument("--workflow", required=True, type=Path,
                          help="Path to API-format workflow JSON. Save via UI: Workflow -> Save (API Format).")
-    parser.add_argument("--host", default=DEFAULT_HOST,
-                         help=f"ComfyUI host:port (default: {DEFAULT_HOST}).")
+    parser.add_argument("--host", default=None,
+                         help="ComfyUI host:port. If omitted, resolves from $COMFYUI_HOST or "
+                              "internal/local_config.json (key: comfyui_host).")
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS,
                          help=f"Number of runs per arm (default: {DEFAULT_RUNS}).")
     parser.add_argument("--sage-mode", default=DEFAULT_SAGE_MODE,
@@ -371,6 +425,8 @@ def main() -> int:
     parser.add_argument("--inter-run-sleep", type=float, default=1.0,
                          help="Seconds to sleep between runs (helps disambiguate trace ts windows).")
     args = parser.parse_args()
+
+    host = resolve_host(args.host)
 
     if not args.workflow.is_file():
         print(f"ERROR: workflow not found: {args.workflow}", file=sys.stderr)
@@ -405,9 +461,9 @@ def main() -> int:
 
     # Pre-flight: ComfyUI reachable?
     try:
-        _http_get(f"http://{args.host}/system_stats", timeout=5.0)
+        _http_get(f"http://{host}/system_stats", timeout=5.0)
     except Exception as exc:
-        print(f"ERROR: ComfyUI not reachable at http://{args.host}: {exc}", file=sys.stderr)
+        print(f"ERROR: ComfyUI not reachable at http://{host}: {exc}", file=sys.stderr)
         return 1
 
     # Snapshot trace file BEFORE the run so we know which file is the
@@ -427,9 +483,9 @@ def main() -> int:
     results_on: list[RunResult] = []
     results_off: list[RunResult] = []
     for run_idx in range(args.runs):
-        results_on.append(run_one(args.host, prompt, args.sage_mode, run_idx, client_id))
+        results_on.append(run_one(host, prompt, args.sage_mode, run_idx, client_id))
         time.sleep(args.inter_run_sleep)
-        results_off.append(run_one(args.host, prompt, args.baseline_mode, run_idx, client_id))
+        results_off.append(run_one(host, prompt, args.baseline_mode, run_idx, client_id))
         time.sleep(args.inter_run_sleep)
 
     # Re-resolve the trace file in case it rotated (it shouldn't have, but if
