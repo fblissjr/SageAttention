@@ -591,6 +591,7 @@ def report(results_on: list[RunResult], results_off: list[RunResult],
     print(f"speedup:  sage_off / sage_on = {speedup:.3f}x")
     print(f"saved:    {delta_s:+.2f}s ({pct_saved:+.1f}% of off-baseline)")
 
+    attn_pct_on: float | None = None
     if any(r.attn_calls for r in results_on):
         attn_med_on = statistics.median(r.attn_total_ms for r in results_on) / 1000.0
         non_attn_on = on_med - attn_med_on
@@ -600,14 +601,6 @@ def report(results_on: list[RunResult], results_off: list[RunResult],
         print(f"non-attn time (sage):   {non_attn_on:.2f}s")
         print(f"off-arm wall:           {off_med:.2f}s "
               f"(no per-call tracer; attn vs non-attn breakdown unavailable)")
-        # Don't print an Amdahl ceiling. The 2026-04-27 cross-arm exec_log
-        # analysis showed sage's reach extends beyond the per-call attn
-        # rows -- a ~26s sampler savings on top of the ~11s pure-attn
-        # delta. A pure-attention-fraction Amdahl gives a LOWER bound,
-        # not a ceiling, and an operator reading "ceiling 1.03x" while
-        # the actual ratio is 1.08x walks away with the wrong story.
-        # Print the factual fraction; let the speedup ratio printed
-        # above speak for itself.
         if attn_pct_on < 20.0:
             print(f"NOTE: attention is {attn_pct_on:.1f}% of wall. Sage's reach may "
                   f"extend beyond the attention rows themselves (sampler-level "
@@ -616,7 +609,30 @@ def report(results_on: list[RunResult], results_off: list[RunResult],
 
     print()
     print("Interpretation:")
-    if speedup >= SPEEDUP_LOAD_BEARING:
+    # If raw speedup looks like a regression but attention is a small fraction
+    # of wall, the slowdown can't be coming from sage by itself -- sage doesn't
+    # run in the non-attention paths where the time is going. Most common
+    # cause (verified 2026-04-27 across two real benches): cold-start
+    # asymmetry between arms (arm 1 paid model-load / VAE-decode autotune /
+    # CUDA workspace alloc that arm 2 reused warm). Surface this BEFORE the
+    # generic "sage SLOWER" message; a reader without per-node exec_log
+    # analysis would otherwise walk away thinking sage broke.
+    cold_start_suspected = (
+        speedup < SPEEDUP_WASH_FLOOR
+        and attn_pct_on is not None
+        and attn_pct_on < 20.0
+    )
+    if cold_start_suspected:
+        print(f"  Sage appears slower end-to-end ({speedup:.2f}x), BUT attention is "
+              f"only {attn_pct_on:.1f}% of wall on the sage arm. The slowdown is in "
+              f"non-attention work where sage doesn't run -- structurally impossible "
+              f"from sage alone. Likely cold-start asymmetry: arm 1 paid one-time "
+              f"costs (model load, VAE-decode autotune, CUDA workspace alloc) that "
+              f"arm 2 reused warm. Re-run with --warmup always after a fresh "
+              f"ComfyUI start, OR aggregate the consumer's exec.jsonl per-node "
+              f"to extract sage's actual sampler delta. Don't read this as a "
+              f"sage regression without per-node confirmation.")
+    elif speedup >= SPEEDUP_LOAD_BEARING:
         print(f"  Sage is load-bearing on this workload "
               f"({speedup:.2f}x speedup). Kernel-side perf research justified.")
     elif speedup >= SPEEDUP_HELPS:
