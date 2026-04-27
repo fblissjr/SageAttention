@@ -518,12 +518,21 @@ def report(results_on: list[RunResult], results_off: list[RunResult],
     if any(r.attn_calls for r in results_on):
         attn_med_on = statistics.median(r.attn_total_ms for r in results_on) / 1000.0
         non_attn_on = on_med - attn_med_on
-        non_attn_off = off_med  # off-arm has no sage trace; treat as all non-sage time
+        attn_pct_on = (attn_med_on / on_med * 100.0) if on_med > 0 else 0.0
         print()
-        print(f"attn-time on sage path: {attn_med_on:.2f}s")
+        print(f"attn-time on sage path: {attn_med_on:.2f}s ({attn_pct_on:.1f}% of wall)")
         print(f"non-attn time (sage):   {non_attn_on:.2f}s")
-        print(f"non-attn time (off):    {non_attn_off - (off_med - on_med):.2f}s  "
-              f"(estimated; off-arm has no per-call breakdown)")
+        print(f"off-arm wall:           {off_med:.2f}s "
+              f"(no per-call tracer; attn vs non-attn breakdown unavailable)")
+        # If attention is < ~20% of wall, sage's kernel-level perf wins
+        # are bounded by Amdahl regardless of speedup magnitude. Surface
+        # this so the operator doesn't read a near-1x speedup as "sage
+        # is broken" when it's "attention isn't the bottleneck."
+        if attn_pct_on < 20.0:
+            print(f"NOTE: attention is only {attn_pct_on:.1f}% of wall on sage arm. "
+                  f"Sage's kernel-level wins are Amdahl-bounded by this fraction; "
+                  f"end-to-end speedup of ~{1.0 / (1.0 - attn_pct_on / 100.0 * 0.62):.2f}x "
+                  f"is the ceiling assuming sage runs at v0.4.1's 2.66x kernel ratio.")
 
     print()
     print("Interpretation:")
@@ -571,6 +580,13 @@ def main() -> int:
     parser.add_argument("--inter-run-sleep", type=float, default=1.0,
                          help="Seconds to sleep between runs (helps disambiguate trace ts windows "
                               "in legacy-glob mode; ignored when run-id resolves).")
+    parser.add_argument("--no-warmup", dest="warmup", action="store_false",
+                         help="Skip the warmup-and-discard prompt before measurement. "
+                              "WARNING: leaves the first measured arm paying cold-start cost "
+                              "(Triton autotune, cuBLAS warmup, CUDA context init, ComfyUI lazy "
+                              "init), which biases short-runs results structurally. Use only "
+                              "when you've already warmed up via a prior bench in this session.")
+    parser.set_defaults(warmup=True)
     args = parser.parse_args()
 
     host = resolve_host(args.host)
@@ -627,6 +643,23 @@ def main() -> int:
     else:
         print(f"trace file (legacy): {trace_path_before}")
     print()
+
+    # Warmup-and-discard. Without it, the first arm pays cold-start
+    # cost (Triton autotune cache miss, cuBLAS / cuDNN warmup, CUDA
+    # context init, ComfyUI's lazy first-prompt initialization), and
+    # the second arm runs fully warm. With --runs 1 + arm-order
+    # bias, the structurally-faster arm can be reported slower by
+    # 100s of seconds when the actual attention-time difference is
+    # only single-digit seconds. Discovered 2026-04-27 when a bench
+    # showed sage_on at 248s vs sage_off at 126s while attention was
+    # only 4.5% of wall -- structurally impossible from sage alone.
+    # Use sage_mode for warmup (warmer cache than baseline_mode --
+    # sage's int8 quant + Triton autotune + JIT).
+    if args.warmup:
+        print(f"[warmup] running 1 prompt in '{args.sage_mode}' mode "
+              f"to populate caches; result discarded.")
+        run_one(host, prompt, args.sage_mode, run_idx=-1, client_id=client_id)
+        time.sleep(args.inter_run_sleep)
 
     # Run interleaved (on / off / on / off / ...) so that wall-time bias from
     # any global drift (thermal, system load, model state) hits both arms
