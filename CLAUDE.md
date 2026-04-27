@@ -92,6 +92,14 @@ covers, so ComfyUI's first gen after a rebuild skips the ~100-500ms
 per-new-shape autotune warmup. `./build.sh` invalidates this cache,
 so re-run the test after every rebuild.
 
+**The first `--check-regression` after `./build.sh` is expected to
+fail on triton-autotune-pending rows** (200-300% drift on
+sub-millisecond cross-attn / K-probe rows is typical -- autotune
+sweep dominates the median). Run the bench once without the flag to
+populate the cache, then re-run with `--check-regression` for the
+gate. `tests/run_all.sh` doesn't currently do this two-step; if you
+wire it in, document the rationale alongside.
+
 ## Testing
 
 Standalone scripts (no pytest). Run against the installed sage in
@@ -249,6 +257,33 @@ telemetry test; multiple GiB for the LTX bench).
   hooks, and several stale doc claims (mask routing, warmup API, two
   `start.sh` references). Bug-density on a fresh diff is high enough
   that one /simplify per coherent arc earns its cost.
+- **Deletion-heavy arcs need a post-arcs `/simplify` pass.** Per-arc
+  commits land kernel/code clean, but cross-arc doc drift (README
+  claims, TLDR claims, inventory lists, stranded headers) survives
+  unless reviewed together. v0.5.0 had 5 real cleanup items found
+  by `/simplify` after the 4 removal commits: stranded
+  `csrc/wgmma.cuh`, README `./build.sh full` reference, README
+  "Hopper/Blackwell as build target" prose, `core.py` docstring
+  "sage 3 Blackwell" mention, dead `_fused` arch entries. Do the
+  simplify pass after the last arc lands, not between.
+- **Before changing bench shapes, run
+  `tests/bench_workload_profile.py` against a recent consumer
+  trace.** Shape decisions made without checking the actual workload
+  distribution drifted twice: original `self_attn_large_704x704x497`
+  at seq=31776/d=64 (stale; never matched production) and would
+  have drifted again at v0.4.1 if the workload-profile coverage
+  check hadn't surfaced "every load-bearing baseline MISS." The
+  script is durable; the discipline isn't free unless documented.
+- **`tests/regression_baselines.json` is the source of truth for
+  shape names; `check_regressions()` discovers anchors from the
+  data.** The first regression-check landed with a hardcoded
+  `self_attn_large_704x704x497` shape-name lookup; when SHAPES
+  renamed in v0.4.1, the speedup-ratio gate went silently dead
+  until `/simplify` caught it. Pattern: any shape-aware logic in
+  the bench infrastructure must derive the shape set from the
+  JSON, not hardcode strings. `tests/test_regression_check.py`
+  guards the dead-branch class with a unit test
+  (`test_speedup_line_appears`).
 - **Record priors before measurement.** For any non-trivial
   measurement (bench-fire, perceptual eval, ablation), commit the
   expected result in writing before the measurement runs. "Did the
