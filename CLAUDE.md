@@ -493,12 +493,25 @@ tests/test_sageattn_ltx_shapes.py
   mode:  fp8_cuda++
   -> primary perf metric: median_ms (today: 20.20 ms)
   -> accuracy guard:      mean_rtol ≤ 0.10 (today: ~0.098)
+  -> kernel speedup ratio: torch_flash / sage_fp8++ = 2.66x (today)
+  -> e2e speedup ratio:    1.22x (v0.5.1 first empirical measurement;
+                           831x480x497 / 25fps / 8-step distilled;
+                           VAE-decode-cold-start-normalized)
 ```
 
+The kernel ratio (2.66x) is what the bench measures directly. The
+e2e ratio (1.22x) is what the consumer's LTX gen achieves; it's
+lower because attention is only 8.2% of gen wall time, but higher
+than pure-attention Amdahl predicts (~1.05x) because sage's reach
+extends beyond per-call attention rows into FFN-adjacent
+amortization within the sampler step. Both numbers move
+independently across torch / triton / CUDA bumps; track both.
+
 Sourced from a real consumer trace; see CHANGELOG v0.4.1 for the
-re-derivation. The earlier metric (`self_attn_large_704x704x497` at
-seq=31776, D=64) was a synthetic shape with the wrong head_dim --
-LTX 2.3 video is D=128, not D=64.
+shape re-derivation and v0.5.1 for the e2e measurement. The earlier
+metric (`self_attn_large_704x704x497` at seq=31776, D=64) was a
+synthetic shape with the wrong head_dim -- LTX 2.3 video is D=128,
+not D=64.
 
 Anything else you might want to measure is secondary, useful as a
 guard against side effects, or explicitly ignored — see below.

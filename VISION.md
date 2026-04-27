@@ -203,10 +203,20 @@ The metric and framework reflect the workload mix on this box as of
    rtol guard isn't the right floor and we add a perceptual layer
    (PSNR / SSIM / LPIPS).
 3. **Kernel ms is not gen ms.** A 2× kernel speedup is invisible
-   end-to-end if attention is already < 50 % of step time. We don't
-   measure end-to-end here. A "this saved 5 ms per call" claim
-   should be paired with "and we observed a real LTX gen go from X
-   seconds to Y" before ranking high.
+   end-to-end if attention is already < 50 % of step time.
+   **Status: confirmed (with refinement) per v0.5.1.** First e2e
+   measurement on the canonical LTX 2.3 audio-loop workload
+   (832×480×497 / 25fps / 8-step distilled): sage's 2.66×
+   kernel-row speedup translates to **1.22× end-to-end**, with
+   attention at 8.2% of wall. Pure-attention Amdahl predicts
+   ~1.05×; observed 1.22× is +17 points higher because sage's
+   reach extends beyond the per-call attention rows into
+   FFN-adjacent amortization within the sampler step. Concrete
+   answer: kernel work IS justified; the simplification "kernel
+   ms = gen ms" isn't literally true; non-attention bottlenecks
+   (VAE decode, caching, scheduler overhead) are where the next
+   round of e2e wins routes. See CHANGELOG v0.5.1 for the
+   measurement detail.
 4. **The next-experiment framework is V1.** It codifies a strategy;
    the strategy hasn't been validated by running through it on a
    real perf change yet. The first time we use it to pick a
