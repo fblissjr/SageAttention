@@ -23,9 +23,11 @@ perf-research framework, see [`CLAUDE.md`](./CLAUDE.md)
 ```bash
 source /path/to/your/venv/bin/activate
 ./build.sh                 # Ampere + Ada (default)
-./build.sh full            # adds Hopper + Blackwell
 ./build.sh clean           # wipe prior artifacts first
 ./build.sh verify          # import-check, no rebuild
+# For Hopper/Blackwell builds, set CUDA_ARCHES explicitly. v0.5.0
+# dropped the `full` action since this fork doesn't validate those
+# archs (sage 3 Blackwell + sm90 kernel removed; see CHANGELOG).
 ```
 
 `./build.sh` requires `VIRTUAL_ENV` to be set so the install lands in
@@ -50,9 +52,10 @@ compiled, which removed `sageattn_qk_int8_pv_fp16_cuda` (the FP16 CUDA
 fallback). Adding `"8.9"` restores it for our target box. Prebuilt
 wheels include every `.so` and aren't affected.
 
-**Scope.** Only matters if you build from source on Ada. If you run
-this fork on Hopper or Blackwell and want the FP16 fallback, widen the
-tuple further.
+**Scope.** Only matters if you build from source on Ada. This fork is
+Ada-targeted; we don't ship Hopper or Blackwell support (sage 3
+Blackwell + sm90 kernel removed in v0.5.0). If you need FP16 fallback
+on a different arch, this isn't the right fork.
 
 ### 2. `sageattention/core.py::sageattn_warmup(shapes, kernels=...)`
 
@@ -274,8 +277,12 @@ measurable speedup."
 - bf16/fp16 input only. No fp32 input path.
 - `torch.compile` around sage. The consumer must wrap calls in
   `torch.compiler.disable()` until the spike's verdict flips.
-- One platform's worth of validation. Code compiles on
-  Ampere/Hopper/Blackwell; we don't bench or debug those.
+- One platform's worth of validation. The default build targets
+  Ampere + Ada; the SM89 extension's `_qattn_sm89` arch list also
+  permits sm100/sm120/sm121 (Blackwell variants compile via the
+  same kernel sources, untested). v0.5.0 removed the dedicated
+  Hopper sm90 kernel and the sage 3 Blackwell FP4 subpackage --
+  this fork is Ada-targeted.
 
 ## Hardware target
 

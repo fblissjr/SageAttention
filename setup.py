@@ -126,9 +126,12 @@ if not SKIP_CUDA_BUILD:
 
             # capability: "8.0+PTX" -> num: "80"
             num = capability.split("+")[0].replace(".", "")
-            if num in {"90", "100", "120", "121"}:
-                # need to use sm90a instead of sm90 to use wgmma ptx instruction.
-                # need to use sm120a to use mxfp8/mxfp4/nvfp4 instructions.
+            if num in {"100", "120", "121"}:
+                # sm120a unlocks mxfp8/mxfp4/nvfp4 instructions on Blackwell.
+                # Reachable only via explicit CUDA_ARCHES env override -- this
+                # fork's _qattn_sm89 ext list permits these caps but we don't
+                # validate Blackwell builds (v0.5.0 dropped the dedicated sm90
+                # kernel and the sage 3 Blackwell FP4 subpackage).
                 num += "a"
 
             NVCC_FLAGS += ["-gencode", f"arch=compute_{num},code=sm_{num}"]
@@ -185,7 +188,7 @@ if not SKIP_CUDA_BUILD:
             ],
             extra_compile_args={
                 "cxx": CXX_FLAGS,
-                "nvcc": get_nvcc_flags(["8.0", "8.9", "9.0", "10.0", "12.0", "12.1"]),
+                "nvcc": get_nvcc_flags(["8.0", "8.9", "10.0", "12.0", "12.1"]),
             },
         )
     )
