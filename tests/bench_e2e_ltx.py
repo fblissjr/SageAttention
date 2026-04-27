@@ -127,6 +127,11 @@ SAGE_NODE_CLASS = "AudioLoopHelperSageAttention"
 SPEEDUP_LOAD_BEARING = 1.50  # >= : sage carries the workload, kernel research justified
 SPEEDUP_HELPS = 1.10         # >= : sage helps but isn't dominant
 SPEEDUP_WASH_FLOOR = 0.95    # >= : noise band; below = real regression
+ATTN_PCT_LOW_FRACTION = 20.0  # < : attention is a small fraction of wall;
+                              # sage's kernel-level wins are Amdahl-bounded
+                              # below this and reads of < 1.0x speedup at
+                              # this fraction are likely cold-start asymmetry,
+                              # not sage regressions.
 
 # Local-config file (gitignored). Lets an operator pin host / workflow
 # paths once on this box without committing them. See
@@ -189,45 +194,34 @@ def _recent_sage_trace_exists() -> bool:
 
 
 def _comfyui_session_has_history(host: str) -> bool:
-    """Probe ComfyUI's `/history` endpoint. Returns True if the
+    """Probe ComfyUI's `/history/1` endpoint. Returns True if the
     server has processed at least one prompt this session.
 
     `/history` is in-memory (not disk-persisted) and resets on
-    ComfyUI restart, so an empty history is a strong signal that
-    ComfyUI is freshly started -- model load, JIT cache, per-node
-    cache all cold regardless of what stale sage trace files are
-    sitting on disk from prior sessions.
+    ComfyUI restart; empty history = freshly started server.
+    `/history/1` caps the response to one entry server-side, so
+    payload stays bounded on long-lived sessions (ComfyUI's
+    `/history` is unbounded otherwise).
 
-    Returns False if the probe fails (network error, endpoint not
-    available); the caller should treat unknown as cold and warm
-    up.
+    OSError-or-decode-error swallow is intentional here -- unlike
+    other HTTP call sites in this file that propagate, this probe
+    is advisory: any uncertainty defaults to "cold" and warmup
+    fires. (urllib.error.URLError is an OSError subclass; one tuple
+    entry covers both.)
     """
-    url = f"http://{host}/history"
     try:
-        with urllib.request.urlopen(url, timeout=5.0) as resp:
-            data = orjson.loads(resp.read())
-    except (urllib.error.URLError, OSError, orjson.JSONDecodeError):
+        data = orjson.loads(_http_get(f"http://{host}/history/1", timeout=5.0))
+    except (OSError, orjson.JSONDecodeError):
         return False
-    if isinstance(data, dict):
-        return len(data) > 0
-    if isinstance(data, list):
+    if isinstance(data, (dict, list)):
         return len(data) > 0
     return False
 
 
 def _caches_appear_warm(host: str) -> bool:
-    """True only if BOTH (a) a recent sage trace exists on disk AND
-    (b) ComfyUI's in-memory history is non-empty (i.e. the server
-    has not just restarted). Either signal alone is unreliable:
-
-    - Trace alone fails when ComfyUI restarts -- old trace mtime
-      remains recent but the in-process state is cold.
-    - History alone fails when ComfyUI processed prompts in another
-      workflow -- it doesn't tell us sage's caches are warm.
-
-    Both together is the strongest filesystem-+-HTTP-probe signal
-    we can build without ComfyUI exposing a session uptime field.
-    """
+    """True only if a recent sage trace exists on disk AND ComfyUI's
+    /history is non-empty. See main()'s warmup-policy comment for
+    why both signals are required."""
     return _recent_sage_trace_exists() and _comfyui_session_has_history(host)
 
 
@@ -558,6 +552,16 @@ def attach_attn_times(results: list[RunResult], trace_path: Path | None) -> str:
 # Reporting
 # ---------------------------------------------------------------------------
 
+def _attn_pct_of_wall(results_on: list[RunResult], on_med: float) -> float | None:
+    """Median attention time as a percentage of median wall time on
+    the sage arm. None when no run has tracer data (off-arm only or
+    trace failed)."""
+    if not any(r.attn_calls for r in results_on) or on_med <= 0:
+        return None
+    attn_med_s = statistics.median(r.attn_total_ms for r in results_on) / 1000.0
+    return attn_med_s / on_med * 100.0
+
+
 def report(results_on: list[RunResult], results_off: list[RunResult],
             trace_path: Path | None, correlation: str = "none") -> None:
     print()
@@ -591,17 +595,16 @@ def report(results_on: list[RunResult], results_off: list[RunResult],
     print(f"speedup:  sage_off / sage_on = {speedup:.3f}x")
     print(f"saved:    {delta_s:+.2f}s ({pct_saved:+.1f}% of off-baseline)")
 
-    attn_pct_on: float | None = None
-    if any(r.attn_calls for r in results_on):
+    attn_pct_on = _attn_pct_of_wall(results_on, on_med)
+    if attn_pct_on is not None:
         attn_med_on = statistics.median(r.attn_total_ms for r in results_on) / 1000.0
         non_attn_on = on_med - attn_med_on
-        attn_pct_on = (attn_med_on / on_med * 100.0) if on_med > 0 else 0.0
         print()
         print(f"attn-time on sage path: {attn_med_on:.2f}s ({attn_pct_on:.1f}% of wall)")
         print(f"non-attn time (sage):   {non_attn_on:.2f}s")
         print(f"off-arm wall:           {off_med:.2f}s "
               f"(no per-call tracer; attn vs non-attn breakdown unavailable)")
-        if attn_pct_on < 20.0:
+        if attn_pct_on < ATTN_PCT_LOW_FRACTION:
             print(f"NOTE: attention is {attn_pct_on:.1f}% of wall. Sage's reach may "
                   f"extend beyond the attention rows themselves (sampler-level "
                   f"amortization); read the speedup ratio above as the empirical "
@@ -620,7 +623,7 @@ def report(results_on: list[RunResult], results_off: list[RunResult],
     cold_start_suspected = (
         speedup < SPEEDUP_WASH_FLOOR
         and attn_pct_on is not None
-        and attn_pct_on < 20.0
+        and attn_pct_on < ATTN_PCT_LOW_FRACTION
     )
     if cold_start_suspected:
         print(f"  Sage appears slower end-to-end ({speedup:.2f}x), BUT attention is "

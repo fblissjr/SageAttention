@@ -100,6 +100,27 @@ populate the cache, then re-run with `--check-regression` for the
 gate. `tests/run_all.sh` doesn't currently do this two-step; if you
 wire it in, document the rationale alongside.
 
+### `tests/bench_e2e_ltx.py` warmup auto-detection
+
+The e2e bench has `--warmup {auto,always,never}` (default `auto`).
+Auto-mode skips the warmup-and-discard prompt only when BOTH:
+1. A non-empty `coderef/.../data/runs/<RUN_ID>/sage.jsonl` exists
+   on disk with mtime < 30 min, AND
+2. ComfyUI's `/history/1` HTTP endpoint returns a non-empty dict.
+
+Either signal alone is unreliable: filesystem mtime persists
+across ComfyUI restarts (false-positive after restart), and
+`/history` non-empty without a recent sage trace doesn't mean
+sage's caches are warm. Both together is the strongest signal we
+can build without ComfyUI exposing a session uptime.
+
+If you suspect the auto-detection is wrong (e.g. you restarted
+ComfyUI and bench still printed "skipped (caches warm)"), pass
+`--warmup always` explicitly. The asymmetric-cost reasoning:
+false-positive (skip warmup when cold) → cold-start measurement
+bias on arm 1 → bench reads as "sage 0.5x SLOWER"; false-negative
+(warm when warm) → wasted 250s. Always errs toward warmup.
+
 ## Testing
 
 Standalone scripts (no pytest). Run against the installed sage in

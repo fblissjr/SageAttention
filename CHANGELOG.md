@@ -252,6 +252,86 @@ sufficient.
 
 ## Versions
 
+### v0.5.2 -- 2026-04-27 PM  (bench reliability: auto-warmup correctness + honest cold-start interpretation)
+
+Two real bugs surfaced in the same hour AFTER v0.5.1 shipped, both
+caught by running the bench end-to-end against ComfyUI restarts:
+
+1. **`--warmup auto` false-positive on ComfyUI restart.** The
+   filesystem-mtime heuristic from v0.5.1 (`aae9b9e`) detected
+   "recent sage trace exists" and skipped warmup. But the trace
+   file persists across ComfyUI restarts; mtime stays recent even
+   though the in-process state (model load, JIT, per-node cache)
+   was reset. Auto-mode correctly identified "sage was active 30
+   min ago" and incorrectly concluded "caches warm now."
+2. **Bench `Interpretation` mislabeled cold-start asymmetry as
+   "sage SLOWER end-to-end."** Two real benches today landed at
+   0.508x and 0.900x raw -- both cold-start-confounded. The bench
+   printed "Sage SLOWER ... Check for instrumentation overhead,
+   fallback paths, or a real regression." A future operator
+   without per-node `exec.jsonl` analysis would walk away thinking
+   sage broke. Sage's actual contribution was 1.22x e2e
+   (audio-loop-helper claude's per-node analysis salvaged the
+   reading; the bench output didn't).
+
+#### Fixed
+
+- **`tests/bench_e2e_ltx.py::_caches_appear_warm(host)`** (commit
+  `a461ddb`). Auto-mode now requires BOTH (a) a recent non-empty
+  sage.jsonl on disk AND (b) ComfyUI's `/history` HTTP endpoint
+  to return a non-empty result. `/history` is in-memory; restart
+  empties it. Combined signal correctly catches the
+  restart-after-trace case the v0.5.1 heuristic missed.
+- **`tests/bench_e2e_ltx.py` Interpretation block** (commit
+  `1a06586`). Added `cold_start_suspected` branch BEFORE the
+  generic SLOWER message. Triggers when `speedup < 0.95x` AND
+  `attn_pct_on < 20%` -- structural signal that the slowdown is
+  in non-attention work where sage doesn't run, almost certainly
+  cold-start asymmetry between arms. Prints a diagnostic message
+  with concrete next-steps (`--warmup always` from fresh ComfyUI,
+  or aggregate exec.jsonl per-node) instead of the misleading
+  "real regression" hint.
+
+#### Refactored (simplify-pass on the fixes above)
+
+- **Reuse existing `_http_get` helper** for the `/history` probe
+  instead of duplicating `urllib.request.urlopen`. The helper
+  was already in the file at line 329.
+- **`/history/1`** instead of `/history`. ComfyUI's `/history` is
+  unbounded across a session; the `/{max_items}` form caps the
+  response server-side. Same empty-vs-not semantics, bounded
+  payload.
+- **`ATTN_PCT_LOW_FRACTION = 20.0` constant** alongside the
+  speedup tier constants. Used twice in `report()`; bump-one-
+  forget-the-other risk neutralized.
+- **`_attn_pct_of_wall(results_on, on_med)` helper** extracted.
+  Removes the declare-default-then-conditionally-assign pattern
+  in the report block.
+- **Drop `urllib.error.URLError`** from the `_http_get` exception
+  tuple (subclass of `OSError`; redundant).
+- **Trim `_caches_appear_warm` docstring** to a one-line summary
+  pointing at `main()`'s warmup-policy comment for the
+  operational rationale.
+
+#### Verified
+
+- `_comfyui_session_has_history` correctly returns True when
+  ComfyUI has processed >=1 prompt this session, False on fresh
+  restart (empty `/history`).
+- `cold_start_suspected` branch fires correctly when replaying
+  yesterday's actual numbers (0.508x raw + 4.5% attn pct);
+  produces the diagnostic message instead of the old "SLOWER ...
+  real regression" message.
+- Other interpretation tiers unchanged; `cold_start_suspected`
+  only intercepts the < 0.95x AND low-attn-pct combination.
+
+#### CLAUDE.md
+
+Added a "Testing / `tests/bench_e2e_ltx.py` warmup auto-detection"
+subsection documenting the two-signal requirement and the
+asymmetric-cost reasoning behind the auto-mode design (false-
+positive worse than false-negative; always errs toward warmup).
+
 ### v0.5.1 -- 2026-04-27  (e2e validation: bench infra fixes + first end-to-end speedup measurement)
 
 The first-ever empirical measurement of sage's end-to-end speedup
