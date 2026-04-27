@@ -71,9 +71,19 @@ for m in ['torch', 'triton', 'sageattention']:
     fi
 } > "${ENV_FILE}"
 
-# 2. LTX-shape bench (head_dim=64).
-echo "[2/4] running tests/test_sageattn_ltx_shapes.py"
-"${PY}" tests/test_sageattn_ltx_shapes.py 2>&1 | tee "${BENCH_LOG}"
+# 2. LTX-shape bench (video d=128, audio d=64) with regression gate.
+# --check-regression exits non-zero on perf drift > 5%, rtol > 0.10,
+# speedup-ratio floor breach, or missing load-bearing measurement.
+# Tee captures the full output before set -e bails on a non-zero exit.
+echo "[2/4] running tests/test_sageattn_ltx_shapes.py --check-regression"
+set +e
+"${PY}" tests/test_sageattn_ltx_shapes.py --check-regression 2>&1 | tee "${BENCH_LOG}"
+LTX_EXIT="${PIPESTATUS[0]}"
+set -e
+if [ "${LTX_EXIT}" -ne 0 ]; then
+    echo "error: LTX bench exited ${LTX_EXIT} (regression detected). See ${BENCH_LOG}." >&2
+    exit "${LTX_EXIT}"
+fi
 
 # 3. Image-shape bench (head_dim ∈ {120, 128}). Separate file so the
 # LTX file stays focused; both reuse the same dispatch helpers.
