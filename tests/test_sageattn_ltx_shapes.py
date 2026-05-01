@@ -56,6 +56,7 @@ class Metrics(NamedTuple):
     mean_atol: float
     max_atol: float
     median_ms: float
+    peak_vram_mib: float | None = None
 
 
 # LTX 2.3 default config (diffusers transformer_ltx2.py:907-947):
@@ -165,10 +166,21 @@ def accuracy_metrics(actual: torch.Tensor, expect: torch.Tensor) -> tuple[float,
     return (rdiff.mean().item(), rdiff.max().item(), diff.mean().item(), diff.max().item())
 
 
-def time_median_ms(fn: Callable, warmup: int = 1, runs: int = 3) -> float:
+def time_and_vram(fn: Callable, warmup: int = 1, runs: int = 3) -> tuple[float, float]:
+    """(median wall-clock ms, peak VRAM MiB) over `runs` timed invocations.
+
+    The warmup pass absorbs Triton/JIT autotune cost so it doesn't pollute
+    either measurement. After warmup we snapshot `memory_allocated` as
+    baseline and reset `max_memory_allocated`, so the returned VRAM is the
+    kernel's working-set delta on top of the caller's persistent tensors
+    (q, k, v, out_ref) -- not total live VRAM. Three identical timed
+    invocations have a stable working set, so max-over-3 is a valid peak.
+    """
     for _ in range(warmup):
         fn()
     torch.cuda.synchronize()
+    baseline = torch.cuda.memory_allocated()
+    torch.cuda.reset_peak_memory_stats()
     samples = []
     for _ in range(runs):
         torch.cuda.synchronize()
@@ -177,7 +189,8 @@ def time_median_ms(fn: Callable, warmup: int = 1, runs: int = 3) -> float:
         torch.cuda.synchronize()
         samples.append((time.perf_counter() - t0) * 1000.0)
     samples.sort()
-    return samples[len(samples) // 2]
+    peak_vram_mib = max(0.0, (torch.cuda.max_memory_allocated() - baseline) / (1024.0 * 1024.0))
+    return samples[len(samples) // 2], peak_vram_mib
 
 
 def make_qkv(shape: Shape, dtype: torch.dtype, v_std: float = 1.0):
@@ -280,8 +293,8 @@ def measure_mode(
 ) -> tuple[Metrics, torch.Tensor]:
     out = mode_fn(q, k, v, mask)
     mean_r, max_r, mean_a, max_a = accuracy_metrics(out, out_ref)
-    median_ms = time_median_ms(lambda: mode_fn(q, k, v, mask))
-    return Metrics(mean_r, max_r, mean_a, max_a, median_ms), out
+    median_ms, peak_vram_mib = time_and_vram(lambda: mode_fn(q, k, v, mask))
+    return Metrics(mean_r, max_r, mean_a, max_a, median_ms, peak_vram_mib), out
 
 
 def print_header(label_width: int):
@@ -293,7 +306,8 @@ def print_header(label_width: int):
     except ImportError:
         print("sage:   (not importable)")
     print(f"{'mode':<{label_width}}  {'mean_rtol':>10}  {'max_rtol':>10}  "
-          f"{'mean_atol':>10}  {'max_atol':>10}  {'median_ms':>10}  speed_x")
+          f"{'mean_atol':>10}  {'max_atol':>10}  {'median_ms':>10}  speed_x  "
+          f"{'vram_MiB':>10}")
 
 
 def run_shape_sweep(
@@ -326,32 +340,36 @@ def run_shape_sweep(
 
         # Compute the reference exactly once per shape; share across all modes.
         out_ref = sdpa_reference(q, k, v, mask)
-        sdpa_ms = time_median_ms(lambda: sdpa_reference(q, k, v, mask))
+        sdpa_ms, sdpa_vram = time_and_vram(lambda: sdpa_reference(q, k, v, mask))
         print(f"    {'SDPA (math)':<{label_width}}"
-              f"  {'-':>10}  {'-':>10}  {'-':>10}  {'-':>10}  {sdpa_ms:>10.2f}  {1.0:>5.2f}x")
+              f"  {'-':>10}  {'-':>10}  {'-':>10}  {'-':>10}  "
+              f"{sdpa_ms:>10.2f}  {1.0:>5.2f}x  {sdpa_vram:>10.1f}")
 
         def _print_row(
             label: str,
             mean_r: float, max_r: float, mean_a: float, max_a: float,
             median_ms: float | None,
+            peak_vram_mib: float | None = None,
             warn_threshold: float = 0.10,
             warn: bool = True,
         ):
             marker = "  !" if warn and mean_r > warn_threshold else ""
             ms_cell = f"{median_ms:>10.2f}" if median_ms is not None else f"{'-':>10}"
             speed_cell = f"{sdpa_ms / median_ms:>5.2f}x" if median_ms is not None else f"{'-':>5} "
+            vram_cell = f"{peak_vram_mib:>10.1f}" if peak_vram_mib is not None else f"{'-':>10}"
             print(
                 f"    {label:<{label_width}}  "
                 f"{mean_r:>10.3g}  {max_r:>10.3g}  "
                 f"{mean_a:>10.3g}  {max_a:>10.3g}  "
-                f"{ms_cell}  {speed_cell}{marker}"
+                f"{ms_cell}  {speed_cell}  {vram_cell}{marker}"
             )
             if warn and mean_r > warn_threshold:
                 warnings.append(f"{shape.name} / {label}: mean_rtol={mean_r:.3g}")
 
         def _print_result(label: str, m: Metrics, warn_rtol: bool = True):
             _print_row(label, m.mean_rtol, m.max_rtol, m.mean_atol, m.max_atol,
-                       median_ms=m.median_ms, warn=warn_rtol)
+                       median_ms=m.median_ms, peak_vram_mib=m.peak_vram_mib,
+                       warn=warn_rtol)
 
         cached_outs: dict[str, torch.Tensor] = {}
         for label, kernel_name, kwargs in MODE_SPECS:

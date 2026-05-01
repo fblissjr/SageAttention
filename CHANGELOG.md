@@ -252,6 +252,57 @@ sufficient.
 
 ## Versions
 
+### v0.5.3 -- 2026-05-01  (fused split-RoPE primitive + bench peak-VRAM column + downstream-symbol contract)
+
+Three coupled additions, all driven by a consumer-side comparison
+doc that surfaced (a) one structural kernel-side gap vs KJNodes'
+`LTX2MemoryEfficientSageAttentionPatch` (his fused-RoPE Triton
+kernel), (b) an unverifiable "memory efficient" framing, and (c) a
+fork API stability concern after v0.5.0 dropped `_qattn_sm90`.
+
+#### Added
+
+- **`sageattention.fused_rope_split(q, k, freqs_cis, *, use_triton=True)`**
+  -- public fused split-RoPE primitive. Matches LTX's
+  `apply_split_rotary_emb` (comfy/ldm/lightricks/model.py:343)
+  exactly via a clean-room Triton kernel; falls back to a torch
+  reference when preconditions fail (non-cuda, non-split-pe,
+  shape mismatch, `use_triton=False`). Lives in
+  `sageattention/triton/fused_rope.py`. Lets consumers drop their
+  own per-block fused-rope kernel (e.g. KJNodes'
+  `fused_rope_qk`) without sage going DiT-aware -- the API is a
+  standalone helper, not bolted into `sageattn()`. v1 covers the
+  split-RoPE convention only (LTX 2.3 video + audio); interleaved
+  variants and other model classes silently fall back.
+  Test: `tests/test_fused_rope.py` (3 CPU tests + 7 GPU tests
+  covering rtol vs reference, dtype coverage, in-place
+  semantics, fallback-path equivalence, dtype guards, public
+  export).
+
+- **`tests/test_sageattn_ltx_shapes.py` peak-VRAM column.** Folded
+  into `time_and_vram(fn) -> (median_ms, peak_vram_mib)` (renamed
+  from `time_median_ms`). Reports per-(shape, kernel) working-set
+  VRAM at zero extra kernel cost -- the warmup pass that already
+  absorbs autotune now also seeds the VRAM baseline, then
+  `reset_peak_memory_stats()` rebases before the 3 timed runs.
+  Initial finding from the new column: at the load-bearing LTX
+  video self-attn shape (D=128, seq=22932), sage `fp8_cuda++`
+  uses ~628 MiB working-set vs `torch_flash` ~182 MiB --
+  empirically refutes "sage = memory efficient" framing for the
+  high-level dispatch path on these shapes (sage materializes
+  q_int8/k_int8/v_fp8/scale intermediates that flash keeps fused
+  in registers/SMEM). Print-only, no regression gate.
+
+- **CLAUDE.md "Downstream-known internal symbols" section.**
+  Documents the de-facto-public underscore surface in
+  `sageattention.core` that downstream consumers (KJNodes' LTX-2
+  patch as canonical example) import by name. Lists the
+  protected symbols, the protected pybind methods on
+  `_qattn_sm89`, and a pre-removal checklist (grep coderef, memo
+  before removal, major-bump on break). Triggered by the v0.5.0
+  `_qattn_sm90` removal, which broke a downstream import case
+  without prior consideration.
+
 ### v0.5.2 -- 2026-04-27 PM  (bench reliability: auto-warmup correctness + honest cold-start interpretation)
 
 Two real bugs surfaced in the same hour AFTER v0.5.1 shipped, both
