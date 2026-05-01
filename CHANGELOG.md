@@ -107,6 +107,100 @@ register-pressure regression verification).
 **Trigger to act:** triton's cross-attn perf becomes a measured
 bottleneck on a real production render (not speculatively).
 
+### `torch.library.custom_op` registration for fused-pybind kernels
+
+Three pybind kernels in `csrc/fused/pybind.cpp:30-32` cause Dynamo
+graph breaks under `torch.compile`, with deterministic precision loss
+(0.0276 rtol drift, > 0.01 budget) from partial-graph reordering across
+the pybind boundary. Empirically verified on torch 2.11.0+cu130 via
+`tests/spike_torch_compile.py` (2026-05-01). The three kernels:
+
+- `_fused.transpose_pad_permute_cuda`
+- `_fused.scale_fuse_quant_cuda`
+- `_fused.mean_scale_fuse_quant_cuda` (smooth_v=True branch, same
+  risk class)
+
+All called from `sageattention/quant.py:281, 289, 292` in the
+`per_channel_fp8` V-quant path -- load-bearing on every fp8 sage call
+on sm89. Registering each as `torch.library.custom_op` with proper
+meta/abstract registrations would let Dynamo trace through them
+without graph breaks.
+
+Size estimate: ~1-2 days per kernel (~3-6 days total) including
+correctness verification under compile.
+
+**Trigger to act:** consumer's path 1 (CUDA graphs on the LTX
+denoiser) fails AND consumer wants path 2 (`torch.compile` the
+denoiser) -- at which point the spike's "keep the disable" verdict
+needs to flip and this work becomes the gating dependency. Until
+then, keep the disable. Re-run the spike after every torch upgrade.
+
+### `arm_kj` synthetic head-to-head VRAM bench
+
+Audio-loop's empirical evidence (2026-05-01 N1-N4 memo) and
+sage-side bench data converged on: the 3.5x VRAM gap of sage
+`fp8_cuda++` (~628 MiB) vs `torch_flash` (~182 MiB) at the
+load-bearing LTX video shape is structural to the int8/fp8 quant
+approach, not specific to sage's dispatcher wrapper -- KJ's
+per-block path also pre-materializes the same int8/fp8
+intermediates before the kernel call.
+
+To falsify conclusively, add a row to
+`tests/test_sageattn_ltx_shapes.py` that calls KJNodes'
+`ltx2_sageattn_forward` (the per-block sage path in their LTX-2
+node module) directly with a synthetic input at the same shape,
+measuring working-set VRAM via the same `time_and_vram` helper.
+Workflow-arm swap is NOT viable -- DAG trace (2026-05-01)
+confirmed `LTX2MemoryEfficientSageAttentionPatch` is NOT in the
+consumer's iclora workflow, so the test would have to install +
+wire KJNodes synthetically, with skip-if-unavailable handling for
+the import.
+
+Size estimate: ~half a day (test row + KJNodes import guard +
+skip helper).
+
+**Trigger to act:** the question becomes load-bearing for some other
+decision (e.g. "should we restructure sage's Python wrappers to
+avoid intermediate materialization?" -- which today the consumer's
+evidence already resolves as "no, gap is structural to int8/fp8
+quant"). Today: not load-bearing.
+
+### Block-along-T optimization on `fused_rope_split` Triton kernel
+
+`/simplify` efficiency review (2026-05-01) flagged that
+`_rope_qk_split_kernel` launches one program per `(t, h, b)` --
+733k programs at the LTX video shape (B=1, H=32, T=22932). Each
+program does ~1024 bytes total I/O on D//2=64 elements, below the
+bf16 cache-line sweet spot. Block along T with `BLOCK_T=8` or `16`
+(one program per `(b, h, t_block)`, inner loop over `t`) cuts the
+grid 8-16x and amortizes program-launch overhead.
+
+Size estimate: ~half a day (kernel restructure + perf
+measurement against a new `tests/bench_fused_rope.py` micro-bench).
+
+**Trigger to act:** a future workflow brings `fused_rope_split`
+above 5% of GPU time. Today: 0.55% on the consumer's iclora
+workflow (their 21:02Z memo) -- not worth the perf-measurement
+work.
+
+### `fused_rope_split` removal candidate
+
+v0.5.3 shipped the primitive on the strength of a comparison-doc
+finding ("only structural kernel-side gap vs KJ's per-block
+patch") that turned out to overstate the value -- consumer
+measured RoPE at 0.55% of GPU time, retracted the ask. Kernel
+earns its space as a sage-fork primitive (low maintenance, ~280
+LOC self-contained, available for future DiT consumers), but the
+immediate ROI is zero. Same disposition as `sageattn_warmup`:
+candidate for removal if no consumer adopts within ~6 months.
+
+**Trigger to act:** by 2026-11-01, audit `coderef/` for any
+consumer importing `sageattention.fused_rope_split`. If none, drop
+the kernel + tests + CLAUDE.md inventory entry in a focused
+deletion arc. Lesson: see `feedback_walltime_before_kernel_day`
+memory entry -- ask for wall-time contribution before kernel-day
+spend on a "kernel-side gap" finding.
+
 ## Decision log
 
 Investigations that closed without action. Recorded so we don't
