@@ -42,6 +42,35 @@ length, that is smaller than the version in circulation and points the
 wrong way for real shapes. It may well survive a proper profile. It has
 not had one.
 
+**A bound now exists, from an A/B rather than a profile (2026-09-08).**
+The consumer's five-scene ladder renders the same geometry under stock
+dense attention, this fork alone, and the approximate override alone.
+Let N be non-attention time, constant across arms; N cannot exceed the
+fastest arm's total, because attention time in that arm cannot be
+negative. Medians (wall total, 1344x768, 345 frames, 16 steps, one seed;
+dense n=4 with one scene excluded for a cache hit, others n=5):
+
+- **attention >= ~71% of a dense render**
+- **attention >= ~32% of a render with this fork** -- the denominator
+  that matters, because it is the configuration anyone actually runs
+
+Both are floors, not estimates: neither this fork nor the override makes
+attention free, so the true shares are higher. The consumer session
+derived the same bound independently from per-scene sampler times and
+got ~72% and ~34%; agreeing from two different fields is worth more than
+either alone.
+
+**So the premise survives, with a number attached, and the number is
+about a third rather than "almost all".** Making attention free would cut
+a real render by at most two thirds *in the dense configuration nobody
+uses*, and by at most a third in the one they do. Amdahl on an attention
+kernel improvement should use ~32%, and a 2x kernel win is then worth
+around a sixth of the render, before VAE decode is even counted.
+
+Cite it with its limits: a bound from an A/B, not a profile; one seed;
+wall time including decode and load; and the dense-versus-approximate
+split is specific to that scheduler, shift, step count and clip length.
+
 **The gap:** LTX has `docs/ltx_workload_profile.md` -- sub-module shares
 from a real render, the canonical input for ranking a perf bet. H3 has no
 equivalent. That is the highest-value missing measurement on this model,
