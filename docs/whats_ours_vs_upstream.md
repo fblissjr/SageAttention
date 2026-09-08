@@ -1,6 +1,6 @@
 # What's ours vs what's upstream
 
-Last updated: 2026-05-16
+Last updated: 2026-09-08
 
 L3 reference for CLAUDE.md. Load this when editing a file and you
 need to know whether the file is unmodified upstream code (lighter
