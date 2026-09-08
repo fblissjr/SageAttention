@@ -166,6 +166,25 @@ interpreter, where every third-party node loaded cleanly.
 
 Ranked by how much silent failure they remove per unit of work.
 
+**R1. Add an upstream-contract test. DONE 2026-09-08 --
+`tests/test_upstream_contracts.py`.**
+
+Four checks, in `run_all.sh`, parsing the consumer source rather than
+importing it: H3's attention call site passes no mask; the single-owner
+container protocol still has `peek`/`take`; whether the caller gives `v`
+independent storage (informational); whether the consumer still
+introspects a signature around `attn_mask`. Each names the documented
+claim it guards, so a failure sends the reader to the sentence rather
+than to a debugger.
+
+Verified against a fabricated tree where every claim is false: the two
+load-bearing checks fail with actionable messages, and a missing
+consumer skips reporting "ran 0 of 4 checks. This is a SKIP, not a
+pass." The original design constraints are met and the reasoning for
+them is below, kept because the next check added here should follow it.
+
+The original argument:
+
 **R1. Add an upstream-contract test. This is the one that matters.**
 
 Findings A1 and A2 are the same bug: we depend on specific upstream
