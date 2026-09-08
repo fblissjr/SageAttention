@@ -96,10 +96,14 @@ the older record.
   | sequence | separate q/kv streams | one packed `[text\|refs\|audio\|video]` |
   | **bottleneck** | mixed -- FFN is a real share (`docs/ltx_workload_profile.md`), attention is one part | attention dominates, but see the share note below -- "almost all of it" overstates what was measured |
 
-  **The bottlenecks differ, so the work that pays differs.** Everything in
-  the FFN line -- `sage_ffn`, the GeGLU extension, the persistent-CTA
-  hybrid for it, the CUTLASS backend -- is **LTX-motivated and buys H3
-  little**, because H3's time is in attention. Conversely, attention-kernel
+  **The bottlenecks differ, so the work that pays differs -- but the H3
+  half of this was wrong, corrected 2026-09-08.** The FFN line was
+  written off here as "LTX-motivated and buys H3 little, because H3's
+  time is in attention". A block profile says H3's MLP is a *larger*
+  share than its attention, on time and on peak memory both
+  (`docs/h3_workload_profile.md`). The shapes still differ -- GELU versus
+  SwiGLU with a `2*ffn` fc1 -- so nothing existing drops in, but the
+  motivation is real and was denied on a false premise. Conversely, attention-kernel
   quality and speed is nearly the whole lever on H3 and only a fraction of
   one on LTX. Rank any perf bet against the model it targets, not against
   the repo in general; the Amdahl ceiling is different per model and a

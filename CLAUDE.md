@@ -19,9 +19,14 @@ the bottom; `git log -p CLAUDE.md` shows exactly what moved where.
   and it covers a second head config plus a masked path H3 cannot reach
   -- but it does not gate `tests/run_all.sh` and does not define the
   load-bearing metric. Re-blocking is one `exit` away in `run_all.sh`.
-- **Zero priority by consequence:** `sage_ffn` and the whole FFN line,
-  and the v0.5.5 native-mask kernel. Both LTX-motivated; H3's time is
-  almost entirely attention and it never passes a mask.
+- **The v0.5.5 native-mask kernel is zero priority** -- LTX-motivated,
+  and H3 never passes a mask.
+- **`sage_ffn` was parked on a premise the profile falsifies.** H3's MLP
+  is a *larger* share of a DiT block than its attention, on time and on
+  peak memory both (`docs/h3_workload_profile.md`). It is still not
+  usable here as it stands -- it targets a GELU MLP where H3 has SwiGLU
+  with a `2*ffn` fc1 -- but "buys H3 little" was wrong, and a SwiGLU
+  variant has a real motivation on the only model we target.
 - Flux / Z-Image are bench shapes, not targets.
 - Other archs fall back to the sm89 kernel and are not tested. No
   Hopper/Blackwell kernels (removed v0.5.0). Linux + source build only.
@@ -180,6 +185,7 @@ kernel sets, `sageattention/triton/` the JIT kernels,
 | What is ours vs upstream? | `docs/whats_ours_vs_upstream.md` |
 | A kernel defect is blocking a workflow | `docs/sage_bug_fix_workflow.md` |
 | H3's two flow schedules under one sampler | `docs/minimax_h3_av_sampling.md` |
+| Where does H3 block time and memory go? | `docs/h3_workload_profile.md` |
 | Where does LTX wall-time go? (parked) | `docs/ltx_workload_profile.md` |
 | Why not torch.compile? | `docs/torch_compile_spike.md` |
 | Does fp16 accumulation change our output? (no) | `docs/fp16_matmul_accum.md`, `docs/fp16_accum_fp8_matmul.md` |
