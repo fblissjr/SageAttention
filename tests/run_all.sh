@@ -127,7 +127,8 @@ echo "[5/6] running correctness suites"
 # grades every other bench in this script. It was absent here until
 # 2026-09-08, so the gate's own logic was the one thing the runner never
 # checked. Pure-python and fast; no reason for it to have been outside.
-for t in test_quant_offset_overflow test_sageattn_consume test_dispatched_kernel_telemetry test_regression_check; do
+for t in test_quant_offset_overflow test_sageattn_consume test_dispatched_kernel_telemetry test_regression_check \
+         test_build_info_contract; do
     echo "  - tests/${t}.py"
     "${PY}" "tests/${t}.py" > "internal/log/${t}_${DATE}.log" 2>&1 || {
         echo "error: tests/${t}.py failed. See internal/log/${t}_${DATE}.log" >&2

@@ -64,7 +64,12 @@ def build_info() -> dict:
     from . import __version__ as version
 
     pkg_dir = Path(__file__).resolve().parent
-    sha = _git(["rev-parse", "--short", "HEAD"], pkg_dir)
+    # --short=12, not bare --short: git auto-scales the abbreviation as a repo
+    # grows, so bare --short can stamp the SAME commit at different widths in
+    # two records. A consumer embeds this verbatim in dated records it does not
+    # rewrite, so the width is pinned. Still a prefix of the full sha, so it
+    # stays resolvable by git either way.
+    sha = _git(["rev-parse", "--short=12", "HEAD"], pkg_dir)
 
     dirty: bool | None = None
     if sha is not None:

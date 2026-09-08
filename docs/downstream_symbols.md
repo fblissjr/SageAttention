@@ -75,6 +75,23 @@ contract:
   itself, the vendored copy is redundant against our fork; it is not
   redundant against stock upstream, so expect it to stay.
 
+## `build_info()` -- a contract with a known consumer
+
+`sageattention.build_info() -> dict` with keys `version`, `revision`,
+`dirty`, `describe`. Added 2026-09-08 because `__version__` is a constant
+that cannot distinguish one build of this fork from another, and a
+downstream consumer's dated evaluation records had identified us by it
+across a full rebuild.
+
+**Treat the key set as a published contract.** That consumer embeds the
+return value verbatim in records it does not rewrite. Adding a key is
+compatible; removing, renaming or retyping one is not, and `revision`'s
+width is pinned at 12 characters so the same commit stamps identically
+regardless of repository size. `dirty` reflects **tracked** files only --
+untracked files are deliberately not dirty, which is the semantics the
+consumer inherits rather than re-deriving. Pinned by
+`tests/test_build_info_contract.py`; the checklist below applies.
+
 ## Pre-removal checklist
 
 Before removing or renaming any symbol in the list above, OR adding
