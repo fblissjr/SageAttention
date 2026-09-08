@@ -596,17 +596,27 @@ copying. No `.clone()` on the v path.
 
 That is precisely the fused-views arrangement v0.7.3 measured at **0 MiB
 either way**. Nothing is broken: the consume path stays correct and
-bit-identical. It is buying nothing on the shipped H3 graph, and the
-predicate returning True is advice no caller currently takes.
+bit-identical, it is simply buying nothing *there*.
 
-**Trigger to act:** wanting that per-call headroom back on H3, which is
-memory-tight. It is caller-side and needs no kernel change -- an
-attention patch that owns the call site can clone `v` when the predicate
-says True. **Verify before shipping it:** the two halves are asymmetric
-(cloning without consuming is a flat +572 MiB at fl2va; consuming at
-`smooth_k=True` hands the clone straight back), so a half-applied
-version costs memory instead of saving it. Measure at the shape in
-question rather than assuming the v0.7.4 figure transfers.
+**Scope correction, made while writing this entry.** The first draft said
+the predicate was advice no caller takes. That is true of ComfyUI's own
+built-in sage path and false of the consumer attention-patch node, which
+owns the H3 call site, clones `v` gated on
+`sageattn_consume_prefers_cloned_v` for the running device, keeps
+`smooth_k=False` because that is what makes the clone pay, and pins the
+wiring with its own test. The saving is realized on that path. The error
+was generalising from the one caller checked to all callers -- the
+asymmetric-verification habit this repo already has a note about.
+
+**So the real finding is narrower and more useful:** the built-in path
+and the node path now differ in per-call memory behaviour on the same
+model. Which one runs decides whether the headroom exists.
+
+**Trigger to act:** only if the built-in path becomes the one that
+matters. Cloning is caller-side and needs no kernel change, but do not
+apply it unconditionally -- the halves are asymmetric (cloning without
+consuming is a flat +572 MiB at fl2va; consuming at `smooth_k=True`
+hands the clone straight back), so a half-applied version costs memory.
 
 **Why this was missed:** nothing failed. The predicate still answers,
 the kernels still run, the output is unchanged -- only the saving

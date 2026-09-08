@@ -805,19 +805,25 @@ Sage exposes three surfaces to downstream consumers:
    `self.qkv_proj(x).split(...)`, i.e. three views of one fused buffer,
    and wraps each in `AttentionTensorContainer`, which stores the tensor
    and does not copy it. There is no `.clone()` on the v path. So the
-   shipped H3 graph is exactly the fused-views case measured at **0 MiB
+   built-in path is exactly the fused-views case measured at **0 MiB
    saved either way**: releasing q and k frees nothing while v holds the
-   same allocation. `sageattn_consume` is still correct and still
-   bit-identical there -- it is simply buying nothing, and
-   `sageattn_consume_prefers_cloned_v` returning True is advice no
-   caller is currently taking.
+   same allocation.
 
-   Recovering it is caller-side and does not need a kernel change: an
-   attention patch that owns the call site can clone v itself when the
-   predicate says True. Do not assume the saving without measuring at
-   the shape in question -- both halves are asymmetric, and the
-   +572/-286 figures above are the reason a half-applied version costs
-   memory rather than saving it.
+   **So whether the saving happens depends on which path handles
+   attention, and the two differ.** A consumer attention-patch node that
+   owns the call site can clone `v` itself, and the one tracked here
+   does: it gates on `sageattn_consume_prefers_cloned_v` for the device
+   it is actually running on, keeps `smooth_k=False` because that is
+   what makes the clone pay, and pins the wiring with its own test. On
+   that path the saving is realized. On ComfyUI's own built-in sage path
+   it is not, and `sageattn_consume` there is correct, bit-identical and
+   buying nothing.
+
+   Do not "fix" this by cloning unconditionally. Both halves are
+   asymmetric -- the +572/-286 figures above are why a half-applied
+   version costs memory instead of saving it -- and the predicate exists
+   so the decision tracks the arch and the fork version rather than a
+   copied constant.
 
    Consumers gate on the predicate rather than on an arch check so that
    a) they don't copy `core._EARLY_RELEASE_ARCHS` into their node where
