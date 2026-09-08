@@ -1043,6 +1043,45 @@ sufficient.
 > LTX-motivated throughout.
 
 
+### v0.7.12 -- 2026-09-08  (`run_all.sh` can pass again; the LTX witness re-baselined)
+
+`tests/run_all.sh` now exits 0 end to end. It could not since **v0.5.5
+(2026-05-13)** -- roughly four months in which the one-shot runner was
+unconditionally red.
+
+**Why it was red.** The `ltx23_video_cross_text_kv226 / auto` baseline was
+recorded when `auto` routed masked calls to `fp16_triton`, because the CUDA
+kernels dropped masks silently. v0.5.5 gave sm89 fp8++ a native mask path
+and pointed the dispatcher at it, which moved that row onto a different
+kernel with a different rtol and a different time. v0.5.5 noticed, called
+the two resulting flags "pre-existing stale baselines" and "separate from
+this fix", and nobody came back.
+
+**Why that mattered more than two noisy lines.** A gate that is always red
+cannot distinguish a new regression from the known one. Every subsequent run
+had to be read by a human who remembered which two flags were expected --
+and `run_all.sh` aborts on the LTX gate's exit code, so the H3 bench, the
+image bench, the correctness suites and the compile spike after it never ran
+at all from the runner. The stale row was not costing us a warning, it was
+costing us the rest of the suite.
+
+**What was updated, and what deliberately was not.** Only that one row's
+`median_ms` and `mean_rtol`, plus its rationale. The rationale is the part
+that matters: this row is a **routing correctness witness**, not a
+performance number. It originally asserted "auto matches fp16_triton" as a
+proxy for "auto did not land on a mask-dropping kernel". Post-v0.5.5 the
+correct assertion is "auto matches fp8_cuda++", and the failure signature it
+guards is unchanged -- a masked call reaching a mask-dropping kernel reads
+about 0.44 here, which breaches the rtol budget and fails the gate. Verified
+in the same run: `auto` and `fp8_cuda++` agree to four decimals, and the two
+mask-dropping kernels sit at ~0.43 in the same table, so the witness still
+has something to witness.
+
+This is a re-baseline against a known, dated, intentional routing change --
+not a refresh to silence red. The distinction is the one under v0.7.10's
+"no regenerate flag": the question to answer before touching a baseline is
+whether you can name what changed and when.
+
 ### v0.7.11 -- 2026-09-08  (`clean` stops breaking the venv you were not building for)
 
 `./build.sh clean` now removes only the artifacts for the interpreter it is

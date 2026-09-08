@@ -152,7 +152,9 @@ additions (we own the contract).
   Standalone scratch / debugging surface; not part of the main
   bench loop.
 - `build.sh` -- editable-install wrapper with VIRTUAL_ENV check,
-  `--python` pin, MAX_JOBS cap.
+  `--python` pin, MAX_JOBS cap, an interpreter-scoped `clean` (plus
+  `clean-all`) so venvs sharing this checkout don't delete each other's
+  tagged `.so`, and a dormant known-bad-CUDA-toolkit guard.
 - `tests/test_sageattn_ltx_shapes.py` -- LTX-parametrized accuracy +
   perf measurement across sage kernels AND torch SDPA backends
   (FLASH / EFFICIENT / CUDNN). Doubles as a regression guard for

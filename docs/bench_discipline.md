@@ -1,20 +1,27 @@
 # Bench discipline
 
-Last updated: 2026-05-13
+Last updated: 2026-09-08
 
-> **Model scope: LTX 2.3 / Z-Image.** The shapes this governs -- the
-> load-bearing **accuracy and speed** bench and every row in
-> `tests/regression_baselines.json` -- are LTX and Z-Image. **No H3 row
-> exists there** as of 2026-08-13, so a green regression run says nothing
-> about H3 accuracy or speed.
+> **Two gated benches, one per model, and they gate different
+> quantities.** `tests/test_sageattn_ltx_shapes.py` +
+> `tests/regression_baselines.json` cover LTX 2.3 and Z-Image;
+> `tests/test_sageattn_h3_shapes.py` + `tests/regression_baselines_h3.json`
+> cover MiniMax H3 (promoted from a spike 2026-09-08, CHANGELOG v0.7.11).
+> Both run gated from `tests/run_all.sh`. A green run on one says nothing
+> about the other -- the models are architecturally different, not two
+> sizes of the same thing.
 >
-> H3 *is* covered elsewhere, and the distinction matters: correctness and
-> VRAM have H3 surfaces (`tests/test_sageattn_consume.py` at fl2va
-> S=41822, `tests/test_quant_offset_overflow.py`,
-> `tests/test_short_seq_tail.py`, and four `tests/spikes/spike_h3_*.py`).
-> It is specifically the rtol-and-wall-clock bench that has no H3 shape.
-> Adding one is gated on the workload-profile step below -- one sequence
-> length measured ad hoc is not a distribution.
+> **The H3 gate deliberately does not gate accuracy.** Its baselines
+> carry speed, peak VRAM and cross-kernel fidelity, and **no
+> rtol-vs-SDPA entries at all**, so the shared gate skips that check
+> because there is nothing to check rather than because a threshold was
+> widened. On synthetic input an rtol against SDPA is not a measurement
+> at H3 config, so gating on it would gate an artifact. H3 accuracy lives
+> in `tests/spikes/spike_h3_real_activations.py`, on captured q/k/v.
+> H3 correctness and VRAM also have their own surfaces
+> (`tests/test_sageattn_consume.py` at fl2va S=41822,
+> `tests/test_quant_offset_overflow.py`, `tests/test_short_seq_tail.py`,
+> and the `tests/spikes/spike_h3_*.py` set).
 
 L3 reference for CLAUDE.md. Load this when:
 - a torch / triton / CUDA / sage-rev bump just happened
@@ -48,7 +55,10 @@ v0.4.1 until the workload-profile coverage check surfaced "every
 load-bearing baseline MISS." The script is durable; the discipline
 isn't free unless documented.
 
-## tests/regression_baselines.json is the source of truth for shape names
+## The baselines JSON is the source of truth for shape names
+
+(There are two now -- `regression_baselines.json` for LTX,
+`regression_baselines_h3.json` for H3. The rule below applies to each.)
 
 `check_regressions()` discovers anchors from the data, not from
 hardcoded strings. The first regression-check landed with a hardcoded
