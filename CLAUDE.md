@@ -559,7 +559,19 @@ identical at a shape where they shouldn't.
   snap, so 345 is the largest legal count; the ratio is still a ratio,
   but it was taken at a shape nobody can render),
   2026-08-14: 493.4 s against 794.7 s sage-alone (1.61x); that baseline ran
-  `fp8_cuda++` while the graphs ship `fp16_cuda`, so it understates.
+  `fp8_cuda++` while the graphs of the day shipped `fp16_cuda`, so it
+  understated.
+
+  **That last clause has since expired -- re-checked 2026-09-08.** Every
+  API graph in the consumer repo now sets the sage node's mode to `auto`
+  (92 of 92), and `auto` on sm89 resolves to `fp8_cuda++`. So the
+  baseline and the shipped graphs run the *same* kernel today and the
+  "understates" correction no longer applies to a current render. Keep
+  the original reading only for the dated 2026-08-14 measurement it
+  describes. Consequence worth carrying: any advice that starts "you are
+  probably on fp16, switch to..." is advice about a configuration nobody
+  runs -- and the real-activation accuracy figures under Testing are the
+  ones that bear on the mode question, not the synthetic table.
 
   **Sage is not idle in the override-on arm, and an earlier version of this
   block said it was.** The "zero DiT calls" figure was read off the
