@@ -5,6 +5,19 @@ L1 routing index. Detailed material lives in `docs/` (committed) and
 
 ## TLDR
 
+> **SCOPE, 2026-09-08: H3 is the only current target. LTX is parked.**
+> The owner is not running LTX for the time being, so nothing is coded or
+> tested *for* LTX: its bench still runs and still reports (the kernels
+> are shared, and it covers a second head config plus a masked path H3
+> never exercises), but it does not gate `tests/run_all.sh` and it no
+> longer defines the load-bearing metric -- that is now the H3 row. Rank
+> every perf bet against H3. The LTX-motivated surfaces are at zero
+> priority by consequence, not deleted: `sage_ffn` and its whole forward
+> line, and the v0.5.5 native-mask kernel, which H3 cannot reach at all.
+> "Parked" is reversible; re-blocking the LTX gate is one `exit` away.
+> Everything below still describes both models, because both still exist
+> in the code.
+>
 > **Two supported model workloads, and they are not interchangeable.**
 > **LTX 2.3** (video, since ~2026-04) and **MiniMax H3** (packed
 > audio-video, since **2026-08-04**, commit `3f3a121`). Flux / Z-Image
