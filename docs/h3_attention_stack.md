@@ -13,77 +13,52 @@ confusion.
 
 ## The attention share: settled 2026-09-08, and it is a curve
 
-**Quote it with a sequence length. A bare "attention is N% of H3" is not
-a well-formed claim,** because attention is O(S^2) where the projections,
-the MLP and the norms are O(S). Measured on the path that ships (INT8
-Linears), one DiT block, `docs/h3_workload_profile.md`:
+**Never quote it without a sequence length.** Attention is O(S^2) where the
+projections, the MLP and the norms are O(S), so its share of a DiT block
+rises with clip length. A bare percentage for this model is not a
+well-formed claim.
 
-| clip | S | attention share of block |
-|---|---|---|
-| 124 frames, fl2va | 41,822 | **55.7%** |
-| 345 frames (ceiling), t2v | 104,030 | **75.6%** |
+**Where the numbers live:** `docs/h3_workload_profile.md` carries the
+per-sub-module table at two clip lengths on the path that ships, and
+`tests/bench_h3_block_profile.py` regenerates it. Do not restate its values
+here; this document goes stale, that one is dated and re-runnable.
 
-**The long-standing 76% figure is vindicated, with one caveat retired and
-one kept.** It was measured at S=109,126 -- a 362-frame length, past H3's
-15.0 s ceiling, so at a shape nobody can render
-(`docs/minimax_h3_av_sampling.md`). The profile above reproduces it
-independently at S=104,030, which *is* renderable. So the number was
-sound; what was wrong was quoting it as if it were length-independent,
-and it is not 90%.
+**Status of the long-standing figure.** The share this repo quoted for
+months was measured past H3's legal frame ceiling, at a shape nobody can
+render (`docs/minimax_h3_av_sampling.md`). The profile reproduces it
+closely at a renderable length on the same path, so the number was sound.
+What was wrong was quoting it as though it were length-independent.
 
-**Two denominators, and they are not interchangeable.** The shares above
-are of a **DiT block**. A separate bound below puts attention at **>= ~32%
-of a whole render**, which is a different and much larger denominator --
-it includes sampler overhead, text encoding, VAE decode and offload. A
-block share and a render share must never be quoted as confirming each
-other; this document did exactly that for part of 2026-09-08 and it was
-wrong.
+**Two denominators, and they are not interchangeable.** The profile reports
+shares of a **DiT block**. The bound below is of a **whole render**, which
+additionally carries sampler overhead, text encoding, VAE decode and
+offload. A block share and a render share must never be quoted as
+confirming each other; this document did exactly that for part of
+2026-09-08 and it was wrong.
 
-**What this does to ranking.** The premise that ranks work on this model
--- attention is where the time is -- holds on the path that ships, at
-both lengths, and strengthens with clip length. Amdahl against a *render*
-should still use the ~32% floor rather than the block share.
+**What this does to ranking.** The premise that ranks work on this model --
+attention is where the time is -- holds on the path that ships, at every
+length measured, and strengthens with clip length. Amdahl against a render
+should use the render-level bound, not the block share.
 
-**A bound now exists, from an A/B rather than a profile (2026-09-08).**
-The consumer's five-scene ladder renders the same geometry under stock
-dense attention, this fork alone, and the approximate override alone.
-Let N be non-attention time, constant across arms; N cannot exceed the
-fastest arm's total, because attention time in that arm cannot be
-negative. Medians (wall total, 1344x768, 345 frames, 16 steps, one seed;
-dense n=4 with one scene excluded for a cache hit, others n=5):
+## The render-level bound
 
-- **attention >= ~71% of a dense render**
-- **attention >= ~32% of a render with this fork** -- the denominator
-  that matters, because it is the configuration anyone actually runs
+The consumer's five-scene ladder renders identical geometry under stock
+dense attention, this fork alone, and the approximate override alone. Let N
+be non-attention time, constant across arms; N cannot exceed the fastest
+arm's total, because attention time in that arm cannot be negative. That
+yields a floor on attention's share of a render for both the dense and the
+sage configuration, the second being the one that ranks this fork's work.
 
 Both are floors, not estimates: neither this fork nor the override makes
-attention free, so the true shares are higher. The consumer session
-derived the same bound independently from per-scene sampler times and
-got ~72% and ~34%; agreeing from two different fields is worth more than
-either alone.
+attention free. The derivation and its figures are recorded in CHANGELOG
+v0.7.x for 2026-09-08; the consumer session derived the same bound from a
+different field of the same record and landed in the same place.
 
-**So the premise survives, with a number attached, and the number is
-about a third rather than "almost all".** Making attention free would cut
-a real render by at most two thirds *in the dense configuration nobody
-uses*, and by at most a third in the one they do. Amdahl on an attention
-kernel improvement should use ~32%, and a 2x kernel win is then worth
-around a sixth of the render, before VAE decode is even counted.
-
-Cite it with its limits: a bound from an A/B, not a profile; one seed;
-wall time including decode and load; and the dense-versus-approximate
-split is specific to that scheduler, shift, step count and clip length.
-
-**Superseded in part, 2026-09-08:** a block profile on the shipped INT8
-path now gives 55.7% at S=41,822 and **75.6% at S=104,030**, the latter
-independently reproducing the old 76% figure at a near-identical length.
-So the old number was sound for near-ceiling clips; what was wrong was
-quoting it as length-independent. See `docs/h3_workload_profile.md`.
-
-**The gap:** LTX has `docs/ltx_workload_profile.md` -- sub-module shares
-from a real render, the canonical input for ranking a perf bet. H3 has no
-equivalent. That is the highest-value missing measurement on this model,
-because it is upstream of every decision about what to optimise, and it
-is a profiling run rather than a kernel day.
+Cite it with its limits: a bound from an A/B rather than a profile, one
+seed, wall time including decode and load, one scene short of a full set on
+the dense arm, and a split specific to that scheduler, shift, step count and
+clip length.
 
 ## Why H3 is not LTX, and why the benches split
 
@@ -102,13 +77,14 @@ the older record.
   | attention sites | self-attn + **masked cross-attn** (headline shape) | **one** call site, no cross-attn |
   | mask | load-bearing (drove the v0.5.5 kernel) | `mask=None` hardcoded; unreachable |
   | sequence | separate q/kv streams | one packed `[text\|refs\|audio\|video]` |
-  | **bottleneck** | mixed -- FFN is a real share (`docs/ltx_workload_profile.md`), attention is one part | **attention: 56% of a DiT block at 124 frames, 76% at the ceiling** (INT8 path). Quote with an S |
+  | **bottleneck** | mixed -- FFN is a real share (`docs/ltx_workload_profile.md`), attention is one part | attention is the majority at every length measured, rising with clip length (`docs/h3_workload_profile.md`) |
 
   **The bottlenecks differ, so the work that pays differs, and for H3 the
   profile confirms it.** The FFN line is LTX-motivated and buys H3
-  little: on the shipped INT8 path attention is 56% of a DiT block at
-  124 frames and 76% at the ceiling, and the MLP never exceeds it
-  (`docs/h3_workload_profile.md`). A bf16 profile briefly suggested the
+  little: on the shipped INT8 path attention is the majority of a DiT
+  block at every length measured and the MLP never exceeds it -- shares
+  and conditions in `docs/h3_workload_profile.md`. A bf16 profile
+  briefly suggested the
   MLP was larger; that was an artifact of measuring a weight format
   nobody runs, and this paragraph carried the wrong version for part of
   2026-09-08. Conversely, attention-kernel
@@ -145,15 +121,20 @@ the older record.
   full-packed-length DiT attention call; sage is the fallback link and
   receives only what the override declines -- depth-gated dense blocks,
   steps outside the sigma window, sub-`min_tokens` calls, masked calls
-  (none, on H3) and kernel errors. Consumer-side e2e at 362 frames
-  (an out-of-ceiling length -- H3 rejects past 15.0 s after the 17n+5
-  snap, so 345 is the largest legal count; the ratio is still a ratio,
-  but it was taken at a shape nobody can render),
-  2026-08-14: 493.4 s against 794.7 s sage-alone (1.61x); that baseline ran
-  `fp8_cuda++` while the graphs of the day shipped `fp16_cuda`, so it
-  understated.
+  (none, on H3) and kernel errors.
 
-  **That last clause has since expired -- re-checked 2026-09-08.** Every
+  > **Dated record -- consumer-side e2e, 2026-08-14.** This is the only
+  > home these figures have; nothing else in the repo records them, so
+  > they are kept here as a record rather than pointed at.
+  > Override-on against sage-alone at a 362-frame packed length. Note the
+  > length is **out of ceiling** -- H3 rejects past 15.0 s after the 17n+5
+  > snap, so 345 is the largest legal count. The ratio is still a ratio,
+  > but it was taken at a shape nobody can render.
+  > Override-on 493.4 s; sage-alone 794.7 s; ratio 1.61x.
+  > The sage-alone arm ran `fp8_cuda++` while the graphs of the day
+  > shipped `fp16_cuda`, so it understated.
+
+**That last clause has since expired -- re-checked 2026-09-08.** Every
   API graph in the consumer repo now sets the sage node's mode to `auto`
   (92 of 92), and `auto` on sm89 resolves to `fp8_cuda++`. So the
   baseline and the shipped graphs run the *same* kernel today and the

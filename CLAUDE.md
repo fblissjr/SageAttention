@@ -21,15 +21,14 @@ the bottom; `git log -p CLAUDE.md` shows exactly what moved where.
   load-bearing metric. Re-blocking is one `exit` away in `run_all.sh`.
 - **The v0.5.5 native-mask kernel is zero priority** -- LTX-motivated,
   and H3 never passes a mask.
-- **`sage_ffn` and the FFN line stay zero priority, and the profile
-  confirms it.** On the path that ships (INT8 Linears) attention is 56%
-  of a DiT block at 124 frames and 76% at the 345-frame ceiling, and the
-  MLP never exceeds it (`docs/h3_workload_profile.md`). A bf16 profile
-  briefly suggested otherwise; that was an artifact of the wrong weight
-  format and is recorded there as the error it was. Attention share
-  rises with length -- O(S^2) against O(S) -- so quote it with an S.
-  The MLP's fc1 is nonetheless the largest single memory transient at
-  both lengths, which is a separate question from where time goes.
+- **`sage_ffn` and the FFN line stay zero priority.** On the path that
+  ships, attention is the majority of a DiT block at every length
+  measured and the MLP never exceeds it; the shares and their conditions
+  are in `docs/h3_workload_profile.md`. Attention scales O(S^2) against
+  O(S) for everything else, so its share rises with clip length -- never
+  quote it without a sequence length. Separately, and not a contradiction:
+  the MLP holds the largest single memory transient at every length
+  measured, which is a question about allocation rather than time.
 - Flux / Z-Image are bench shapes, not targets.
 - Other archs fall back to the sm89 kernel and are not tested. No
   Hopper/Blackwell kernels (removed v0.5.0). Linux + source build only.

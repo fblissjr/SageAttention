@@ -58,25 +58,29 @@ entry, not the process peak.
 
 ## Findings
 
-**Attention is the majority of block compute at both lengths, and rises
-steeply with length: 56% at 124 frames, 76% at the ceiling.** Attention is
-O(S^2) where everything else is O(S). So a single number for "H3's attention
-share" is not a well-formed claim, but the direction of the old one was right.
+Values live in the tables above; this section states directions and what
+follows from them.
 
-**That 75.6% independently reproduces the repo's long-standing 76% figure**,
-which was measured at S=109,126 on the production path. Two instruments at
-near-identical lengths agreeing is real corroboration -- unlike the pairing
-this document made in its first version. What remains fair criticism of the
-old figure is only that it was taken at an out-of-ceiling length and quoted as
-though length-independent, not that the number was wrong.
+**Attention is the majority of block compute at both lengths, and its share
+rises steeply with length**, because attention is O(S^2) where everything
+else in the block is O(S). A single number for "H3's attention share" is
+therefore not a well-formed claim -- quote it with a sequence length.
 
-**The MLP never exceeds attention on the production path.** fc1+fc2 is 25.2%
-at 124 frames and 13.9% at the ceiling.
+**The long-standing figure is vindicated.** It was measured past H3's legal
+frame ceiling, so at a shape nobody can render
+(`docs/minimax_h3_av_sampling.md`). The ceiling row above reproduces it
+independently at a renderable length on the same path. So the number was
+sound; what was wrong was quoting it as though length-independent, and
+believing the larger version that circulated in conversation.
 
-**Memory: `mlp fc1` is the largest single transient at both lengths** (2502
-and 6223 MiB), above the fused QKV buffer (1930 / 4801) and above the
-attention kernel's working set (1433 / 3563). This survives the weight-format
-correction, because both terms are O(S) and the ordering does not flip.
+**The MLP never exceeds attention on the production path**, at either
+length.
+
+**Memory is a separate question from time, and it answers differently.**
+`mlp fc1` holds the largest single transient at both lengths -- above the
+fused QKV buffer and above the attention kernel's working set. That survives
+the weight-format correction below, because the terms involved scale
+together and the ordering cannot flip.
 
 ## The correction, kept because it cost three wrong conclusions
 
