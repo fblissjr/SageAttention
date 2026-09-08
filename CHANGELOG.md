@@ -595,6 +595,39 @@ spend on a "kernel-side gap" finding.
 Investigations that closed without action. Recorded so we don't
 re-derive them. Each entry has an explicit reopen-trigger.
 
+### `torch.library.opcheck` cannot grade our sm89 ops, and the failure looks like our bug
+
+**Closed 2026-09-08.** After the move to torch 2.14 the question was
+whether our `@torch.library.custom_op` / `register_fake` registrations in
+`sageattention/sm89_compile.py` still satisfy the contract. A warning-free
+import proves nothing there -- a schema mismatch raises at call time, not at
+import -- so `opcheck` is the right instrument.
+
+**Run it and it fails**, on the production fp8++ op, with
+`"mul_cuda" not implemented for 'Float8_e4m3fn'` out of `test_schema`. That
+reads as a sage defect. It is not one.
+
+**Control:** a minimal, well-formed custom op -- mutates an out param,
+returns a fresh tensor, same shape as ours -- **passes** `opcheck` with a
+bf16 input and **fails with the identical error** when one input is fp8. So
+`test_schema`'s own machinery cannot grade an op that takes an fp8 tensor on
+this torch. (The first control was itself malformed, returning a mutated
+input, and failed both arms; it was rebuilt before either result was
+believed. A control that fails everywhere distinguishes nothing.)
+
+**What we can still assert.** Run explicitly, the other three sub-tests pass
+on the real op: `test_faketensor`, `test_autograd_registration`,
+`test_aot_dispatch_dynamic`. `test_faketensor` is the one that exercises
+`register_fake`, which is the leg of the four-place coupling this was asking
+about. So the registration is positively tested; only `test_schema` is
+unavailable.
+
+**Reopen trigger:** a torch release that teaches `test_schema`'s comparison
+path about fp8 dtypes, or any change to the ops' signatures or
+`mutates_args`. Re-run with the bf16-vs-fp8 control alongside -- without it,
+the failure is indistinguishable from a real schema break, which is exactly
+how this would get rediscovered as a defect.
+
 ### comfy-kitchen SageAttention port evaluated: stay, adopt one technique (binding boundary)
 
 **Closed 2026-05-23.** An external SageAttention port landed in
