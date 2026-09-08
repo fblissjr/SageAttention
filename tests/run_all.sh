@@ -41,15 +41,16 @@ DATE="$(date +%F)"
 ENV_FILE="internal/bench_env_${DATE}.txt"
 BENCH_LOG="internal/log/test_sageattn_ltx_shapes_${DATE}.log"
 IMAGE_LOG="internal/log/test_sageattn_image_shapes_${DATE}.log"
+H3_LOG="internal/log/test_sageattn_h3_shapes_${DATE}.log"
 SPIKE_LOG="internal/log/spike_torch_compile_${DATE}.log"
 
 echo "== venv:        ${VENV_DIR}"
 echo "== repo root:   ${REPO_ROOT}"
-echo "== logs to:     ${ENV_FILE}, ${BENCH_LOG}, ${IMAGE_LOG}, ${SPIKE_LOG}"
+echo "== logs to:     ${ENV_FILE}, ${BENCH_LOG}, ${H3_LOG}, ${IMAGE_LOG}, ${SPIKE_LOG}"
 echo
 
 # 1. env snapshot. uv pip freeze (since uv venvs lack a pip module).
-echo "[1/4] snapshotting env -> ${ENV_FILE}"
+echo "[1/6] snapshotting env -> ${ENV_FILE}"
 {
     echo "# bench env snapshot, captured $(date -Iseconds)"
     echo "# venv: replaced for privacy"
@@ -75,7 +76,7 @@ for m in ['torch', 'triton', 'sageattention']:
 # --check-regression exits non-zero on perf drift > 5%, rtol > 0.10,
 # speedup-ratio floor breach, or missing load-bearing measurement.
 # Tee captures the full output before set -e bails on a non-zero exit.
-echo "[2/4] running tests/test_sageattn_ltx_shapes.py --check-regression"
+echo "[2/6] running tests/test_sageattn_ltx_shapes.py --check-regression"
 set +e
 "${PY}" tests/test_sageattn_ltx_shapes.py --check-regression 2>&1 | tee "${BENCH_LOG}"
 LTX_EXIT="${PIPESTATUS[0]}"
@@ -85,10 +86,26 @@ if [ "${LTX_EXIT}" -ne 0 ]; then
     exit "${LTX_EXIT}"
 fi
 
-# 3. Image-shape bench (head_dim ∈ {120, 128}). Separate file so the
+# 3. H3-shape bench (packed AV self-attn, 56 heads, d=128) with its own gate.
+# Separate baselines file because H3 gates different quantities than LTX:
+# speed, peak VRAM and cross-kernel fidelity, but NOT rtol against SDPA --
+# that number is not a measurement at H3 config on synthetic input. See the
+# bench's module docstring.
+echo
+echo "[3/6] running tests/test_sageattn_h3_shapes.py --check-regression"
+set +e
+"${PY}" tests/test_sageattn_h3_shapes.py --check-regression 2>&1 | tee "${H3_LOG}"
+H3_EXIT="${PIPESTATUS[0]}"
+set -e
+if [ "${H3_EXIT}" -ne 0 ]; then
+    echo "error: H3 bench exited ${H3_EXIT} (regression detected). See ${H3_LOG}." >&2
+    exit "${H3_EXIT}"
+fi
+
+# 4. Image-shape bench (head_dim ∈ {120, 128}). Separate file so the
 # LTX file stays focused; both reuse the same dispatch helpers.
 echo
-echo "[3/4] running tests/test_sageattn_image_shapes.py"
+echo "[4/6] running tests/test_sageattn_image_shapes.py"
 "${PY}" tests/test_sageattn_image_shapes.py 2>&1 | tee "${IMAGE_LOG}"
 
 # 4. Correctness suites that gate on an assertion rather than a number.
@@ -96,7 +113,7 @@ echo "[3/4] running tests/test_sageattn_image_shapes.py"
 # and fail the whole script -- unlike the benches above, a failure here is
 # a defect, not a measurement.
 echo
-echo "[4/5] running correctness suites"
+echo "[5/6] running correctness suites"
 for t in test_quant_offset_overflow test_sageattn_consume test_dispatched_kernel_telemetry; do
     echo "  - tests/${t}.py"
     "${PY}" "tests/${t}.py" > "internal/log/${t}_${DATE}.log" 2>&1 || {
@@ -108,12 +125,13 @@ done
 
 # 5. torch.compile spike.
 echo
-echo "[5/5] running tests/spike_torch_compile.py"
+echo "[6/6] running tests/spike_torch_compile.py"
 "${PY}" tests/spike_torch_compile.py 2>&1 | tee "${SPIKE_LOG}"
 
 echo
 echo "done. summary:"
 echo "  env:     ${ENV_FILE}"
 echo "  ltx:     ${BENCH_LOG}  ($(grep -c '^===' "${BENCH_LOG}" || echo 0) shapes)"
+echo "  h3:      ${H3_LOG}  ($(grep -c '^===' "${H3_LOG}" || echo 0) shapes)"
 echo "  image:   ${IMAGE_LOG}  ($(grep -c '^===' "${IMAGE_LOG}" || echo 0) shapes)"
 echo "  spike:   ${SPIKE_LOG}  ($(grep -E '^(verdict|final)' "${SPIKE_LOG}" | tail -1))"

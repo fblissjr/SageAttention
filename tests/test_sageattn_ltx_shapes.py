@@ -55,7 +55,7 @@ class Metrics(NamedTuple):
     max_rtol: float
     mean_atol: float
     max_atol: float
-    median_ms: float
+    median_ms: float | None
     peak_vram_mib: float | None = None
 
 
@@ -400,6 +400,20 @@ def run_shape_sweep(
             )
             _print_row("fp8++vs.triton", mean_r, max_r, mean_a, max_a,
                        median_ms=None, warn_threshold=0.15)
+            # Stored, not just printed, so a baselines file can gate it. This
+            # row is cross-implementation *fidelity* -- both kernels approximate
+            # the same exact attention, so their disagreement is a property of
+            # the arithmetic and is measurable on synthetic input. That makes it
+            # the accuracy-adjacent quantity a workload can gate when its
+            # rtol-vs-SDPA number is not a measurement (see CLAUDE.md on H3).
+            measurements[(shape.name, "fp8++vs.triton")] = Metrics(
+                mean_rtol=mean_r, max_rtol=max_r,
+                mean_atol=mean_a, max_atol=max_a,
+                # No timing: this row is a comparison of two already-measured
+                # outputs, not a kernel run. None rather than nan so a stray
+                # median_ms baseline on this row is skipped, not compared.
+                median_ms=None, peak_vram_mib=None,
+            )
 
         # Torch SDPA, FlashInfer, and SpargeAttention each iterate the same
         # try/measure/SKIP/print pattern; only the dispatcher differs. Sage's
@@ -447,6 +461,7 @@ def check_regressions(
     rtol_budget = float(cfg.get("rtol_budget", 0.10))
     perf_drift_pct = float(cfg.get("perf_drift_pct", 5.0))
     speedup_floor = float(cfg.get("speedup_ratio_floor", 1.5))
+    vram_drift_budget = float(cfg.get("vram_drift_pct", 5.0))
 
     regressions: list[str] = []
     notes: list[str] = []
@@ -516,6 +531,21 @@ def check_regressions(
                     f"baseline {baseline_ms:.2f} ms ({drift_pct:.1f}%) "
                     f"-- verify env stable before updating baselines"
                 )
+
+        baseline_vram = entry.get("peak_vram_mib")
+        if baseline_vram is not None and m.peak_vram_mib is not None:
+            # VRAM carries its own threshold: allocator behaviour is coarser
+            # than timing, so the perf threshold is the wrong scale for it.
+            vram_drift_pct = (m.peak_vram_mib - baseline_vram) / baseline_vram * 100.0
+            if vram_drift_pct > vram_drift_budget:
+                line = (
+                    f"VRAM     {shape} / {mode}: {m.peak_vram_mib:.0f} MiB vs "
+                    f"baseline {baseline_vram:.0f} MiB (+{vram_drift_pct:.1f}%, "
+                    f"threshold {vram_drift_budget:.1f}%)"
+                )
+                (regressions if load_bearing else notes).append(line)
+                if load_bearing:
+                    fail = True
 
         if baseline_rtol is not None and m.mean_rtol is not None:
             if m.mean_rtol > rtol_budget:

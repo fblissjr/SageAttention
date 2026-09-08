@@ -194,12 +194,14 @@ Standalone scripts (no pytest). Run against the installed sage in
 `$VIRTUAL_ENV`, not the source tree directly.
 
 ```bash
-./tests/run_all.sh                     # env snapshot + ltx + image + spike
+./tests/run_all.sh                     # env snapshot + ltx + h3 + image + spike
 VENV=/path/to/venv ./tests/run_all.sh  # explicit venv
 
 # Individual:
 ${VIRTUAL_ENV}/bin/python tests/test_sageattn_ltx_shapes.py
 ${VIRTUAL_ENV}/bin/python tests/test_sageattn_ltx_shapes.py --check-regression
+${VIRTUAL_ENV}/bin/python tests/test_sageattn_h3_shapes.py
+${VIRTUAL_ENV}/bin/python tests/test_sageattn_h3_shapes.py --check-regression
 ${VIRTUAL_ENV}/bin/python tests/test_sageattn_image_shapes.py
 ${VIRTUAL_ENV}/bin/python tests/spike_torch_compile.py
 ${VIRTUAL_ENV}/bin/python tests/test_flashattn2.py     # if flash-attn installed
@@ -485,10 +487,25 @@ identical at a shape where they shouldn't.
 
   Consequences that have already bitten: the v0.5.5 native-mask kernel is
   LTX-motivated and buys H3 nothing; `fp16_cuda`'s silent mask-drop
-  disqualifies it for LTX but not for H3; the load-bearing bench row is an
-  LTX shape and the bench has **no H3 coverage at all**. Anything dated
-  before 2026-08-04 is LTX/Z-Image by construction -- cite it as
-  corroborating a pattern, never as confirming an H3 result.
+  disqualifies it for LTX but not for H3. Anything dated before 2026-08-04
+  is LTX/Z-Image by construction -- cite it as corroborating a pattern,
+  never as confirming an H3 result.
+
+  **Each model has its own gated bench, and they gate different
+  quantities.** `tests/test_sageattn_ltx_shapes.py` +
+  `tests/regression_baselines.json` for LTX;
+  `tests/test_sageattn_h3_shapes.py` + `tests/regression_baselines_h3.json`
+  for H3 (promoted from a spike in v0.7.10). Both run gated in
+  `tests/run_all.sh`. The H3 file gates **speed, peak VRAM and cross-kernel
+  fidelity only** -- its baselines carry no rtol-vs-SDPA entries at all, so
+  the shared gate skips that check by construction rather than by a loose
+  threshold. That is the synthetic-input rule under Testing applied to a
+  gate: an rtol against SDPA on `torch.randn` is not a measurement at H3, so
+  gating on it would gate an artifact. H3 accuracy stays with
+  `tests/spikes/spike_h3_real_activations.py` and its captured q/k/v. H3
+  sequence lengths are derived in-file from the consumer node's own geometry
+  rules, not hand-copied, so a node-side geometry change shows up as a shape
+  change rather than as silent drift.
 
   **On H3, most attention no longer reaches sage.** Since 2026-08-14 the
   shipped consumer graphs chain a third-party block-sparse-attention CUDA

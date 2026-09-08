@@ -1,0 +1,204 @@
+{
+  "_schema_version": 1,
+  "_what_this_gates": "Speed and peak VRAM on MiniMax H3 packed self-attn shapes, plus cross-kernel fidelity (fp8++ vs triton). Deliberately NOT rtol against SDPA: on synthetic input that number is not a measurement at H3 config -- see the module docstring and CLAUDE.md. H3 accuracy lives in tests/spikes/spike_h3_real_activations.py.",
+  "_rtol_budget_note": "rtol_budget applies only to the fp8++vs.triton row, the one row carrying mean_rtol. 0.15 matches that row's own printed warn threshold: the two kernels' independent errors combine in quadrature to a floor near 0.10, so a tighter budget would fire on the expected value. Reasoned from that floor, not measured.",
+  "_env_snapshot": "internal/bench_env_2026-09-08.txt",
+  "rtol_budget": 0.15,
+  "perf_drift_pct": 5.0,
+  "vram_drift_pct": 5.0,
+  "speedup_ratio_floor": 1.5,
+  "baselines": [
+    {
+      "shape": "mmh3_fl2va_selfattn_1344x768_124f",
+      "mode": "auto",
+      "median_ms": 114.26,
+      "peak_vram_mib": 1433.0
+    },
+    {
+      "shape": "mmh3_fl2va_selfattn_1344x768_124f",
+      "mode": "fp16_cuda",
+      "median_ms": 196.016,
+      "peak_vram_mib": 1718.2
+    },
+    {
+      "shape": "mmh3_fl2va_selfattn_1344x768_124f",
+      "mode": "fp16_triton",
+      "median_ms": 163.831,
+      "peak_vram_mib": 1715.6
+    },
+    {
+      "shape": "mmh3_fl2va_selfattn_1344x768_124f",
+      "mode": "fp8++vs.triton",
+      "mean_rtol": 0.1012,
+      "load_bearing": true
+    },
+    {
+      "shape": "mmh3_fl2va_selfattn_1344x768_124f",
+      "mode": "fp8_cuda",
+      "median_ms": 130.12,
+      "peak_vram_mib": 1433.0
+    },
+    {
+      "shape": "mmh3_fl2va_selfattn_1344x768_124f",
+      "mode": "fp8_cuda++",
+      "median_ms": 115.235,
+      "peak_vram_mib": 1433.0,
+      "load_bearing": true
+    },
+    {
+      "shape": "mmh3_fl2va_selfattn_1344x768_124f",
+      "mode": "torch_cudnn",
+      "median_ms": 317.588,
+      "peak_vram_mib": 571.8
+    },
+    {
+      "shape": "mmh3_fl2va_selfattn_1344x768_124f",
+      "mode": "torch_flash",
+      "peak_vram_mib": 580.7,
+      "load_bearing": true
+    },
+    {
+      "shape": "mmh3_t2va_selfattn_1344x768_124f",
+      "mode": "auto",
+      "median_ms": 93.862,
+      "peak_vram_mib": 1294.7
+    },
+    {
+      "shape": "mmh3_t2va_selfattn_1344x768_124f",
+      "mode": "fp16_cuda",
+      "median_ms": 160.201,
+      "peak_vram_mib": 1551.9
+    },
+    {
+      "shape": "mmh3_t2va_selfattn_1344x768_124f",
+      "mode": "fp16_triton",
+      "median_ms": 133.635,
+      "peak_vram_mib": 1549.5
+    },
+    {
+      "shape": "mmh3_t2va_selfattn_1344x768_124f",
+      "mode": "fp8++vs.triton",
+      "mean_rtol": 0.1006
+    },
+    {
+      "shape": "mmh3_t2va_selfattn_1344x768_124f",
+      "mode": "fp8_cuda",
+      "median_ms": 106.744,
+      "peak_vram_mib": 1294.7
+    },
+    {
+      "shape": "mmh3_t2va_selfattn_1344x768_124f",
+      "mode": "fp8_cuda++",
+      "median_ms": 93.241,
+      "peak_vram_mib": 1294.7
+    },
+    {
+      "shape": "mmh3_t2va_selfattn_1344x768_124f",
+      "mode": "torch_cudnn",
+      "median_ms": 259.632,
+      "peak_vram_mib": 516.4
+    },
+    {
+      "shape": "mmh3_t2va_selfattn_1344x768_124f",
+      "mode": "torch_flash",
+      "median_ms": 253.551,
+      "peak_vram_mib": 524.5
+    },
+    {
+      "shape": "mmh3_t2va_selfattn_768x768_124f",
+      "mode": "auto",
+      "median_ms": 31.594,
+      "peak_vram_mib": 747.0
+    },
+    {
+      "shape": "mmh3_t2va_selfattn_768x768_124f",
+      "mode": "fp16_cuda",
+      "median_ms": 54.881,
+      "peak_vram_mib": 895.2
+    },
+    {
+      "shape": "mmh3_t2va_selfattn_768x768_124f",
+      "mode": "fp16_triton",
+      "median_ms": 46.043,
+      "peak_vram_mib": 893.9
+    },
+    {
+      "shape": "mmh3_t2va_selfattn_768x768_124f",
+      "mode": "fp8++vs.triton",
+      "mean_rtol": 0.1002
+    },
+    {
+      "shape": "mmh3_t2va_selfattn_768x768_124f",
+      "mode": "fp8_cuda",
+      "median_ms": 37.052,
+      "peak_vram_mib": 747.0
+    },
+    {
+      "shape": "mmh3_t2va_selfattn_768x768_124f",
+      "mode": "fp8_cuda++",
+      "median_ms": 32.562,
+      "peak_vram_mib": 747.0
+    },
+    {
+      "shape": "mmh3_t2va_selfattn_768x768_124f",
+      "mode": "torch_cudnn",
+      "median_ms": 86.666,
+      "peak_vram_mib": 297.9
+    },
+    {
+      "shape": "mmh3_t2va_selfattn_768x768_124f",
+      "mode": "torch_flash",
+      "median_ms": 84.674,
+      "peak_vram_mib": 302.6
+    },
+    {
+      "shape": "mmh3_token_refiner_fl2va",
+      "mode": "auto",
+      "median_ms": 0.569,
+      "peak_vram_mib": 98.0
+    },
+    {
+      "shape": "mmh3_token_refiner_fl2va",
+      "mode": "fp16_cuda",
+      "median_ms": 0.799,
+      "peak_vram_mib": 98.0
+    },
+    {
+      "shape": "mmh3_token_refiner_fl2va",
+      "mode": "fp16_triton",
+      "median_ms": 0.713,
+      "peak_vram_mib": 98.0
+    },
+    {
+      "shape": "mmh3_token_refiner_fl2va",
+      "mode": "fp8++vs.triton",
+      "mean_rtol": 0.0984
+    },
+    {
+      "shape": "mmh3_token_refiner_fl2va",
+      "mode": "fp8_cuda",
+      "median_ms": 0.631,
+      "peak_vram_mib": 98.0
+    },
+    {
+      "shape": "mmh3_token_refiner_fl2va",
+      "mode": "fp8_cuda++",
+      "median_ms": 0.567,
+      "peak_vram_mib": 98.0
+    },
+    {
+      "shape": "mmh3_token_refiner_fl2va",
+      "mode": "torch_cudnn",
+      "median_ms": 0.938,
+      "peak_vram_mib": 28.7
+    },
+    {
+      "shape": "mmh3_token_refiner_fl2va",
+      "mode": "torch_flash",
+      "median_ms": 0.916,
+      "peak_vram_mib": 29.1
+    }
+  ],
+  "_torch_flash_note": "The torch_flash entry is load_bearing but deliberately carries NO median_ms. load_bearing is what makes check_regressions discover this shape as the speedup anchor; the ratio it then checks uses live measurements from both arms, not this baseline. Measured run-to-run spread on torch_flash's own absolute timing exceeds perf_drift_pct, so a timing baseline here would fire on noise while telling us nothing the ratio does not. Sage's own rows are stable well inside the threshold.",
+  "_stability_note": "Rows are reproducible to well under perf_drift_pct on a settled GPU. A run started immediately after sustained prior load can show a large one-off transient on an individual row (observed once during promotion, on a non-load-bearing row, and not reproducible in three settled repeats). If a single row fires alone and implausibly, re-run on an idle GPU before investigating the kernel."
+}

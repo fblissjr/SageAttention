@@ -1022,6 +1022,86 @@ sufficient.
 > LTX-motivated throughout.
 
 
+### v0.7.10 -- 2026-09-08  (H3 gets a gated bench, and it gates different things)
+
+`tests/spikes/spike_minimax_h3_shapes.py` becomes
+`tests/test_sageattn_h3_shapes.py`, with `tests/regression_baselines_h3.json`
+and a slot in `tests/run_all.sh`. The shapes and the geometry derivation are
+unchanged -- they were already right. What was missing was status: the file
+measured H3 every time someone ran it by hand, and gated nothing, ever.
+
+**What the H3 gate covers, and the reason it is not the LTX gate.** Speed,
+peak VRAM, and cross-kernel fidelity (`fp8++vs.triton`). Its baselines carry
+**no rtol-vs-SDPA entries at all**, so the shared gate skips that check
+because there is nothing to check, not because the threshold was widened.
+
+This is the synthetic-input rule under Testing applied to a gate rather than
+to a table. At H3 config a `torch.randn` rtol against SDPA is not a
+measurement of anything we ship -- the input has no channel offset and no
+attention structure, so softmax is near-uniform and the output is a
+near-cancelling average, and the reported error is dominated by that
+cancellation. A gate built on it would fire on the artifact and stay silent
+on a real change. H3 accuracy remains
+`tests/spikes/spike_h3_real_activations.py`, on captured q/k/v.
+
+Speed and VRAM survive synthetic input because the input distribution does
+not change the work done. Fidelity survives because two implementations of
+the same exact attention disagreeing is a property of the arithmetic. Those
+three are exactly what is left, so those three are what it gates.
+
+**Two supporting changes in the shared harness**, both additive and both
+inert for the existing LTX baselines:
+
+- The `fp8++vs.triton` row was printed and then discarded. It is now stored
+  in `measurements`, so a baselines file can gate it. Its `median_ms` is
+  `None` rather than a sentinel -- the row compares two already-measured
+  outputs and never ran a kernel, so a stray timing baseline on it is
+  skipped rather than compared against nonsense.
+- `check_regressions` gained a peak-VRAM check, keyed the same opt-in way as
+  the rtol check (present in the entry or not checked) and carrying its own
+  `vram_drift_pct` because allocator behaviour is coarser than timing and the
+  perf threshold is the wrong scale for it.
+
+**Load-bearing rows** are the fl2va shape at the consumer node's default
+canvas and frame count -- the thing production actually renders -- on
+`fp8_cuda++`, plus its `torch_flash` comparand so the speedup floor has an
+anchor to auto-discover, plus the fidelity row. Everything else drift-warns
+without failing.
+
+**No regenerate flag, deliberately.** The baselines were generated
+programmatically from a measured run rather than transcribed, but that
+generator was not committed. A one-keystroke baseline reset is how a gate
+becomes decorative: the first red turns into a refresh instead of an
+investigation. Updating these stays a deliberate act, per
+`docs/bench_discipline.md`.
+
+**The gate was proved able to fail before it was trusted.** A mutated copy
+of the baselines -- load-bearing timings and VRAM halved, rtol budget
+tightened below the fidelity row's floor -- makes all three checks fire. A
+gate that has only ever been seen green is not known to be a gate, and this
+repo's recurring defect is instruments that could not have detected what they
+were trusted to detect.
+
+**Two things that surfaced from doing that, both kept.** The `torch_flash`
+row is load-bearing but deliberately carries **no** `median_ms`: the flag is
+what makes the speedup anchor auto-discover this shape, and the ratio check
+reads live measurements from both arms rather than that baseline, while
+torch_flash's own absolute timing was measured drifting past
+`perf_drift_pct` between settled runs. A timing baseline there would fire on
+noise and add nothing the ratio does not already cover. Sage's own rows were
+stable well inside the threshold across repeats.
+
+Separately, one non-load-bearing row showed a large one-off transient in the
+run that immediately followed the heaviest back-to-back sequence, and did not
+reproduce in three settled repeats. Recorded in the baselines file as a
+read-the-gate note: a single implausible row firing alone is a re-run on an
+idle GPU before it is a kernel investigation. This is the sustained-load
+clock-state risk under Testing showing up in the bench itself rather than in
+a render.
+
+**Known-good state at promotion:** gate exits clean, with the speedup anchor
+resolving on the fl2va shape and clearing its floor.
+
 ### v0.7.9 -- 2026-09-08  (`KNOWN_BAD_CUDA` retired: the headers moved, not nvcc)
 
 **`build.sh`: `KNOWN_BAD_CUDA` is now empty.** The guard mechanism stays --
