@@ -9,142 +9,99 @@ rather than quoting these numbers if the config or the shape changes.
 ## What was actually run
 
 **No workflow, no sampler, no render.** One DiT block, synthetic weights,
-bf16, sm89, sage at `auto` (which resolves to `fp8_cuda++`). Config read from
-source (`comfy/ldm/minimax/model.py:474-477`): hidden 5376, 50 layers, 56
-heads, head_dim 128 (inner 7168), ffn 14336.
+sm89, sage at `auto` (resolving to `fp8_cuda++`). Config read from source
+(`comfy/ldm/minimax/model.py:474-477`): hidden 5376, 50 layers, 56 heads,
+head_dim 128 (inner 7168), ffn 14336.
 
-Two sequence lengths, because **the answer depends on the length and the
-first version of this document did not say so**:
+**Two weight formats, and only one of them describes production.** The
+consumer's H3 base is INT8 ConvRot, so every Linear in a real render goes
+through `comfy/ops.py::linear_input_act` into `comfy_kitchen.int8_linear`,
+and `fc2` folds the SwiGLU into its input quantizer. A first version of this
+profile used plain bf16 `nn.Linear` and its numbers were wrong about
+production by a wide margin -- see the correction below.
+
+Two sequence lengths, because the split moves with S:
 
 | | S | geometry |
 |---|---|---|
-| short | 41,822 | 1344x768, 124 frames (~5.2 s), fl2va with 2 keyframes |
+| short | 41,822 | 1344x768, 124 frames (~5.2 s), fl2va, 2 keyframes |
 | long | 104,030 | 1344x768, 345 frames (~14.4 s), t2v, the legal ceiling |
 
-Peak is the transient each sub-module **adds** over the allocator's state on
-entry, not the process peak -- that is the number that decides whether moving
-a seam would help.
+Peak is the transient each sub-module **adds** over the allocator state on
+entry, not the process peak.
+
+## Production path (INT8) -- these are the numbers to use
 
 ### S=41,822 (124 frames)
 
 | sub-module | ms | % of block | peak transient MiB |
 |---|---|---|---|
-| norm (RMSNorm x2) | 2.00 | 0.6% | 858 |
-| qkv_proj Linear | 59.59 | 19.1% | 1715 |
-| attention (sage fp8++) | 111.08 | **35.6%** | 1433 |
-| out_proj Linear | 19.77 | 6.3% | 429 |
-| mlp fc1 Linear | 79.91 | 25.6% | **2287** |
-| mlp fc2 Linear | 39.40 | 12.6% | 429 |
-| block total | 311.75 | 100% | |
+| norm (RMSNorm x2) | 2.00 | 1.0% | 858 |
+| qkv_proj int8 | 29.77 | 15.0% | 1930 |
+| **attention (sage fp8++)** | 110.58 | **55.7%** | 1433 |
+| out_proj int8 | 6.20 | 3.1% | 715 |
+| mlp fc1 int8 | 31.29 | 15.8% | **2502** |
+| mlp fc2 int8+swiglu | 18.66 | 9.4% | 2144 |
+| block total | 198.51 | 100% | |
 
 ### S=104,030 (345 frames)
 
 | sub-module | ms | % of block | peak transient MiB |
 |---|---|---|---|
-| norm (RMSNorm x2) | 4.98 | 0.4% | 2134 |
-| qkv_proj Linear | 152.04 | 12.8% | 4267 |
-| attention (sage fp8++) | 676.54 | **57.1%** | 3563 |
-| out_proj Linear | 48.70 | 4.1% | 1067 |
-| mlp fc1 Linear | 204.44 | 17.3% | **5689** |
-| mlp fc2 Linear | 97.65 | 8.2% | 1067 |
-| block total | 1184.34 | 100% | |
+| norm (RMSNorm x2) | 4.97 | 0.6% | 2134 |
+| qkv_proj int8 | 73.87 | 8.3% | 4801 |
+| **attention (sage fp8++)** | 675.57 | **75.6%** | 3563 |
+| out_proj int8 | 15.41 | 1.7% | 1778 |
+| mlp fc1 int8 | 77.35 | 8.7% | **6223** |
+| mlp fc2 int8+swiglu | 46.65 | 5.2% | 5334 |
+| block total | 893.83 | 100% | |
 
-Allocation figures reconcile exactly with the arithmetic at both lengths,
-which is the cheapest check that the instrument measured what it claims.
+## Findings
 
-## The finding is a curve, not a number
+**Attention is the majority of block compute at both lengths, and rises
+steeply with length: 56% at 124 frames, 76% at the ceiling.** Attention is
+O(S^2) where everything else is O(S). So a single number for "H3's attention
+share" is not a well-formed claim, but the direction of the old one was right.
 
-**The attention/MLP ranking flips with clip length.**
+**That 75.6% independently reproduces the repo's long-standing 76% figure**,
+which was measured at S=109,126 on the production path. Two instruments at
+near-identical lengths agreeing is real corroboration -- unlike the pairing
+this document made in its first version. What remains fair criticism of the
+old figure is only that it was taken at an out-of-ceiling length and quoted as
+though length-independent, not that the number was wrong.
 
-| | attention | MLP (fc1+fc2) |
+**The MLP never exceeds attention on the production path.** fc1+fc2 is 25.2%
+at 124 frames and 13.9% at the ceiling.
+
+**Memory: `mlp fc1` is the largest single transient at both lengths** (2502
+and 6223 MiB), above the fused QKV buffer (1930 / 4801) and above the
+attention kernel's working set (1433 / 3563). This survives the weight-format
+correction, because both terms are O(S) and the ordering does not flip.
+
+## The correction, kept because it cost three wrong conclusions
+
+The first version of this profile used bf16 `nn.Linear`. On that path
+attention read 35.6% at 124 frames and the MLP 38.2%, and this document
+concluded that **the MLP was the larger share and that `sage_ffn`'s parking
+had been falsified**. It then concluded that the ranking *flipped* with clip
+length. Both conclusions were artifacts of the wrong weight format:
+
+| | bf16 (not production) | INT8 (production) |
 |---|---|---|
-| 124 frames | 35.6% | **38.2%** |
-| 345 frames | **57.1%** | 25.5% |
+| attention @ 124f | 35.6% | **55.7%** |
+| MLP @ 124f | 38.2% | 25.2% |
+| attention @ 345f | 57.1% | **75.6%** |
+| block total @ 124f | 311.8 ms | 198.5 ms |
 
-Attention is O(S^2) where the projections and the MLP are O(S), so a 2.49x
-sequence length moves attention from a minority of block compute to a clear
-majority. Both of the following are true, and neither is true unqualified:
+An INT8 linear is much faster than the bf16 one, so every Linear row was
+inflated and attention's share understated. **`sage_ffn`'s parking was never
+falsified.** The reasoning that parked it -- H3's time is overwhelmingly
+attention -- holds on the path that ships.
 
-- at a short clip, **the MLP is a larger share of the block than attention**
-- at the ceiling clip, **attention is more than half the block**
-
-**Correction, and it matters for how the earlier number was presented.** The
-first version of this document paired the 35.6% figure with the render-level
-bound of `>= ~32%` and called them two methods landing in the same place. They
-are not measurements of one quantity: the bound was derived from renders at
-345 frames, this profile's 35.6% is at 124 frames, and the quantity scales
-with S. Consistent, yes; corroborating, no. That is the same axis-promotion
-error this session has now made four times -- evidence and claim quantifying
-over different things.
-
-**What survives at both lengths: the memory result.** `mlp fc1`'s transient is
-the largest single allocation in the block at 124 frames (2287 MiB, over the
-fused QKV buffer's 1715) and at 345 frames (5689 MiB, over 4267). That
-ordering does not flip, because both terms are O(S).
-
-`self.fc1(x)` is evaluated before `linear_input_act` is called
-(`comfy/ldm/minimax/model.py`), so that transient materialises on **every**
-path. The INT8 fusion in `comfy/ops.py::linear_input_act` avoids writing the
-*post-SwiGLU* intermediate (a further `S x ffn`), not fc1's output.
-
-## What this does to this fork's ranking
-
-**The FFN line was parked on a premise that is true at one clip length and
-false at another.** `sage_ffn` was ranked at zero priority because H3's time
-is "almost entirely attention". At the ceiling clip that is nearly right --
-attention is 57% of the block. At a 124-frame clip it is wrong: the MLP is the
-larger share. So the honest statement is that the FFN's value on H3 depends on
-what people render, and nobody checked which clip lengths dominate actual use
-before ranking it at zero. On memory it is the larger transient at both
-lengths.
-
-That does not make `sage_ffn` usable here as it stands -- it targets a GELU MLP and
-H3's is SwiGLU with a `2*ffn` fc1, a different shape -- but the reason for
-parking it was wrong, and a SwiGLU variant now has a real motivation on the
-only model this fork targets.
-
-**The memory levers are aimed off-target.** `sageattn_consume`, the caller-side
-`v` clone and the `per_channel_fp8` transpose-buffer item all act inside the
-attention path, which holds neither the largest transient nor the seam where
-it is created. They recover hundreds of MiB downstream of a producer-side
-approach that reportedly saves gigabytes, and the largest allocation in the
-block is not in their path at all.
-
-## VALIDITY WARNING: this measured a configuration nobody runs
-
-**Added 2026-09-08, hours after the profile. Read before acting on any
-number above.**
-
-This profile used plain bf16 `nn.Linear` for the projections and the MLP.
-**Production does not.** The consumer's H3 base is INT8 ConvRot, so every
-Linear in a real render goes through `comfy/ops.py::linear_input_act` into
-`comfy_kitchen.int8_linear` -- a different kernel with different speed and
-different memory behaviour. Only the attention arm matches what ships.
-
-Two consequences, in opposite directions, and neither is small:
-
-**Time.** An INT8 linear should be faster than the bf16 one measured here.
-If so, every Linear row above is inflated and **attention's share is
-understated at both lengths** -- so the "MLP is larger at 124 frames"
-finding may not survive on the real path at all.
-
-**Memory.** A trajectory trace shows the block peaks not at `fc1` but just
-after the SwiGLU, where fc1's output and the SwiGLU's output are live
-together (5746 MiB at S=41,822, against 4320 reached during attention).
-That concurrency is exactly what `linear_input_act` fuses away on the INT8
-path -- the activation rides inside fc2's quantizer instead of writing a
-full-size intermediate. **So the peak this profile found is plausibly an
-artifact of the bf16 path and may not exist in production.**
-
-This is the repo's own "measure the config that ships" rule, violated in
-the file written to settle a ranking question. The shares here are
-suggestive and the method is reusable; the numbers should not be quoted
-about production until re-run against the quantized Linears, either by
-constructing INT8 weights or by profiling a real render.
-
-What survives regardless: attention's share rises steeply with clip length
-(O(S^2) against O(S)), so any single-number claim about "the attention
-share of H3" is wrong whatever the weight format.
+The rule this violated is the repo's own: *measure the config that ships*. It
+was violated in the file written to settle a ranking question, and the error
+survived two rounds of correction because each round re-examined the shape and
+never the weight format.
 
 ## Limits, so this is not over-read
 

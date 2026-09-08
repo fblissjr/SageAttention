@@ -93,6 +93,12 @@ def _timed(fn, warmup=2, iters=5):
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--seq", type=int, default=DEFAULT_SEQ)
+    ap.add_argument("--weights", choices=("bf16", "int8"), default="bf16",
+                    help="int8 mirrors production: the consumer's H3 base is "
+                         "INT8 ConvRot, so every Linear goes through "
+                         "comfy_kitchen.int8_linear and fc2 folds the SwiGLU "
+                         "into its input quantizer. bf16 is plain nn.Linear "
+                         "and does NOT describe a real render.")
     args = ap.parse_args()
     S = args.seq
 
@@ -105,9 +111,26 @@ def main() -> None:
     dev, dt = "cuda", torch.bfloat16
     print(f"H3 DiT block profile -- S={S:,}  hidden={HIDDEN} heads={HEADS} "
           f"head_dim={HEAD_DIM} ffn={FFN}")
-    print(f"sage: {build_info()['describe']}  torch: {torch.__version__}")
+    print(f"sage: {build_info()['describe']}  torch: {torch.__version__}  "
+          f"weights: {args.weights}"
+          + ("" if args.weights == "int8" else "  <- NOT production; see --weights int8"))
     print(f"one block; the model stacks {LAYERS} identical ones, so shares "
           f"carry and absolute times multiply.\n")
+
+    if args.weights == "int8":
+        import comfy_kitchen as ck
+
+        def q(w):
+            qd, sc = ck.quantize_int8_tensorwise(w)
+            return qd, sc
+
+        def mk(i, o):
+            return q(torch.randn(o, i, device=dev, dtype=dt) * 0.02)
+
+        Wqkv, Wout = mk(HIDDEN, INNER * 3), mk(INNER, HIDDEN)
+        W1, W2 = mk(HIDDEN, FFN * 2), mk(FFN, HIDDEN)
+        lin = lambda W, x, act=None: ck.int8_linear(
+            x, W[0], W[1], None, dt, convrot=False, input_act=act)
 
     qkv_proj = nn.Linear(HIDDEN, INNER * 3, bias=False, device=dev, dtype=dt)
     out_proj = nn.Linear(INNER, HIDDEN, bias=False, device=dev, dtype=dt)
@@ -116,29 +139,48 @@ def main() -> None:
     norm = nn.RMSNorm(HIDDEN, device=dev, dtype=dt)
     x = torch.randn(S, HIDDEN, device=dev, dtype=dt)
 
-    with torch.inference_mode():
+    # Each stage builds only its own inputs and frees them before the next.
+    # Building all of them up front held ~19 GB at the ceiling length and OOMed
+    # every interesting stage -- a property of the harness, not the model.
+    def _q_kv():
         qkv = qkv_proj(x)
-        q, k, v = (t.view(S, HEADS, HEAD_DIM).transpose(0, 1).unsqueeze(0).contiguous()
-                   for t in qkv.split(INNER, dim=-1))
-        attn_out = torch.randn(S, INNER, device=dev, dtype=dt)
-        h_ffn = torch.randn(S, FFN, device=dev, dtype=dt)
+        out = tuple(t.view(S, HEADS, HEAD_DIM).transpose(0, 1).unsqueeze(0).contiguous()
+                    for t in qkv.split(INNER, dim=-1))
+        del qkv
+        return out
 
-        stages = [
-            ("norm (RMSNorm x2)", lambda: (norm(x), norm(x))),
-            ("qkv_proj  Linear", lambda: qkv_proj(x)),
-            ("attention sage", lambda: sageattn(q, k, v, tensor_layout="HND",
-                                                is_causal=False)),
-            ("out_proj  Linear", lambda: out_proj(attn_out)),
-            ("mlp fc1   Linear", lambda: fc1(x)),
-            ("mlp fc2   Linear", lambda: fc2(h_ffn)),
-        ]
-        rows = []
-        for label, fn in stages:
+    int8 = args.weights == "int8"
+    stages = [
+        ("norm (RMSNorm x2)", lambda: ((), lambda _: (norm(x), norm(x)))),
+        (f"qkv_proj  {'int8' if int8 else 'Linear'}",
+         lambda: ((), (lambda _: lin(Wqkv, x)) if int8 else (lambda _: qkv_proj(x)))),
+        ("attention sage",
+         lambda: (_q_kv(), lambda t: sageattn(t[0], t[1], t[2],
+                                              tensor_layout="HND", is_causal=False))),
+        (f"out_proj  {'int8' if int8 else 'Linear'}",
+         lambda: ((torch.randn(S, INNER, device=dev, dtype=dt),),
+                  (lambda t: lin(Wout, t[0])) if int8 else (lambda t: out_proj(t[0])))),
+        (f"mlp fc1   {'int8' if int8 else 'Linear'}",
+         lambda: ((), (lambda _: lin(W1, x)) if int8 else (lambda _: fc1(x)))),
+        # Production calls fc2 on fc1's FULL 2*ffn output with the SwiGLU folded
+        # into its input quantizer; the bf16 arm has no such fusion and takes
+        # the post-activation tensor instead.
+        (f"mlp fc2   {'int8+swiglu' if int8 else 'Linear'}",
+         lambda: ((torch.randn(S, FFN * (2 if int8 else 1), device=dev, dtype=dt),),
+                  (lambda t: lin(W2, t[0], "swiglu")) if int8 else (lambda t: fc2(t[0])))),
+    ]
+
+    rows = []
+    with torch.inference_mode():
+        for label, build in stages:
             try:
-                ms, mib = _timed(fn)
+                inputs, call = build()
+                ms, mib = _timed(lambda: call(inputs))
                 rows.append((label, ms, mib))
+                del inputs, call
             except Exception as exc:  # noqa: BLE001
-                print(f"  {label:<20} FAILED: {type(exc).__name__}: {exc}")
+                print(f"  {label:<22} FAILED: {type(exc).__name__}: {str(exc)[:60]}")
+            torch.cuda.empty_cache()
 
     tot_ms = sum(r[1] for r in rows)
     print(f"{'sub-module':<22}{'ms':>9}{'% time':>9}{'peak MiB':>11}")

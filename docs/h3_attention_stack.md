@@ -71,6 +71,12 @@ Cite it with its limits: a bound from an A/B, not a profile; one seed;
 wall time including decode and load; and the dense-versus-approximate
 split is specific to that scheduler, shift, step count and clip length.
 
+**Superseded in part, 2026-09-08:** a block profile on the shipped INT8
+path now gives 55.7% at S=41,822 and **75.6% at S=104,030**, the latter
+independently reproducing the old 76% figure at a near-identical length.
+So the old number was sound for near-ceiling clips; what was wrong was
+quoting it as length-independent. See `docs/h3_workload_profile.md`.
+
 **The gap:** LTX has `docs/ltx_workload_profile.md` -- sub-module shares
 from a real render, the canonical input for ranking a perf bet. H3 has no
 equivalent. That is the highest-value missing measurement on this model,
@@ -96,14 +102,14 @@ the older record.
   | sequence | separate q/kv streams | one packed `[text\|refs\|audio\|video]` |
   | **bottleneck** | mixed -- FFN is a real share (`docs/ltx_workload_profile.md`), attention is one part | attention dominates, but see the share note below -- "almost all of it" overstates what was measured |
 
-  **The bottlenecks differ, so the work that pays differs -- but the H3
-  half of this was wrong, corrected 2026-09-08.** The FFN line was
-  written off here as "LTX-motivated and buys H3 little, because H3's
-  time is in attention". A block profile says H3's MLP is a *larger*
-  share than its attention, on time and on peak memory both
-  (`docs/h3_workload_profile.md`). The shapes still differ -- GELU versus
-  SwiGLU with a `2*ffn` fc1 -- so nothing existing drops in, but the
-  motivation is real and was denied on a false premise. Conversely, attention-kernel
+  **The bottlenecks differ, so the work that pays differs, and for H3 the
+  profile confirms it.** The FFN line is LTX-motivated and buys H3
+  little: on the shipped INT8 path attention is 56% of a DiT block at
+  124 frames and 76% at the ceiling, and the MLP never exceeds it
+  (`docs/h3_workload_profile.md`). A bf16 profile briefly suggested the
+  MLP was larger; that was an artifact of measuring a weight format
+  nobody runs, and this paragraph carried the wrong version for part of
+  2026-09-08. Conversely, attention-kernel
   quality and speed is nearly the whole lever on H3 and only a fraction of
   one on LTX. Rank any perf bet against the model it targets, not against
   the repo in general; the Amdahl ceiling is different per model and a
