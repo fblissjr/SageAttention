@@ -244,15 +244,38 @@ same session was never scored, only the pairwise one, and the export is
 marked partial. Enough to say there is no gross defect; not enough to
 rule out a small quality cost.
 
-**And the build under test was not this one.** Those renders predate the
-framework upgrade and the C++20 rebuild. The toolkit comparison done the
-same day showed bit-identical kernel output between two compilers, but
-that is not the same comparison: nothing here compares the pre-upgrade
-build against the current one, and the older standard cannot be rebuilt
-against the current framework to try. So the evidence is about the build
-that shipped then. If a future change alters kernel behaviour rather
-than only recompiling it, this ladder does not cover it -- which is the
-standing-accuracy-gate gap again, from the other direction.
+**And the build under test was not this one -- but the source was.**
+Two different axes, and it is worth keeping them apart because a result
+on one gets quoted as covering the other.
+
+*Source axis, verified:* no attention kernel source changed between
+those renders and now. `git log` over `csrc/` and `sageattention/` since
+that date returns only a version export and the deletion of a helper
+that was never on the attention path. No `.cu`, no `.cuh`, no dispatch
+or quantisation module.
+
+*Toolchain axis, not verifiable:* the same source is now compiled under a
+newer language standard against newer framework headers. The toolkit
+comparison run the same day showed bit-identical output between two
+compilers, and that does **not** reach this -- it holds one standard and
+one set of headers fixed while varying the compiler. The comparison that
+would reach it cannot be run, because the older standard will not
+compile against the current framework at all.
+
+So the residual is narrow and stated exactly: identical kernel source,
+recompiled under a changed standard and changed headers, with the
+compiled result unverified against the build the grading used. That is a
+much smaller gap than "the evidence is about an old build", and it is
+still a gap.
+
+*A note on the corroboration.* The consumer-side session read the same
+verdict file and reported the same five results. That is worth
+something, since the verdicts are verbatim from the record either way --
+but it was **not** two blind reads. Each session had told the other what
+it was looking for before the other looked, so the framing travelled in
+at least one direction and probably both. Agreement between two readers
+who have exchanged notes is weaker evidence than it feels like, which is
+the same trap as the rest of this document.
 
 **The one thread worth pulling, and not yet.** The single loss came with
 a named artifact on the highest-motion scene. On one pair that is not
