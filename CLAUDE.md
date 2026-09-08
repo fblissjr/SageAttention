@@ -936,6 +936,14 @@ graph-breaks at, the trigger to revisit, and the estimated work in
   profile, and the gate procedure: intra-clip, never numeric, video not
   stills, prove the knob fired. Read before running a quality A/B on any
   attention approximation.
+- `docs/drift_audit_and_directions.md` -- dated audit (2026-09-08) of
+  claims in committed material that had gone false without anything
+  failing, the negatives checked alongside them, and where to dig next.
+  Read it before assuming a documented fact about an upstream file is
+  still true, and before attributing render quality to this fork -- it
+  carries the attribution order, and the reason no accuracy gate exists
+  for the packed audio-video model. Not a work queue: triggers live in
+  CHANGELOG's Backlog, closed items in its Decision log.
 - `docs/moving_targets.md` -- how to work when the dependencies change
   by the hour: pin versions with the measurement not the session,
   re-verify upstream gates in both directions, treat a name in a
