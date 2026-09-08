@@ -65,7 +65,10 @@ The 24.6% residual contains:
 
 1. **`audio_to_video_attn`** -- the other direction of AV cross-attn (video Q, audio KV). Present in `BasicAVTransformerBlock` but missing from the existing tracer's `SUB_MODULE_NAMES`. Estimated 1-6% of sampler. Tracer extension landed consumer-side, awaiting re-render to populate.
 2. **`cross_attention_adaln`** -- AdaLN-Single applied per transformer block (48 blocks * 22 sampler steps * ~7 calls/block per the dataflow audit). Implemented as `apply_cross_attention_adaln(...)` free function over `nn.Parameter` tables, not a hookable Module. Estimated 3-4% of sampler. torch.profile aten-op trace landed consumer-side, awaiting re-render.
-3. **RoPE rotation kernels** -- sage ships `fused_rope_split` at ~0.55% share.
+3. **RoPE rotation kernels** -- measured at ~0.55% share. sage shipped a
+   `fused_rope_split` helper for this and **retired it 2026-09-08**: the
+   share never justified it, nothing ever imported it, and ComfyUI now
+   routes this operation through `comfy_kitchen` on both tracked models.
 4. **Norm layers** -- `norm{1,2,3}` LayerNorm/RMSNorm per block, un-fused.
 5. **NAG cross-attn calls within sampler** -- 5-15% of cross-attn cost when active. Unmeasured directly.
 6. **Mask construction + token-shape ops + init noise + sigma arithmetic + hook overhead** -- small but non-zero.

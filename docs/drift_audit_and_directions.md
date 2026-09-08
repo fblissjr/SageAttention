@@ -279,22 +279,34 @@ limit. It is a latent ceiling with a stated trigger, not a live defect.
 
 ## Where to dig further
 
-**D1. Overlap with the consumer's kernel library. Highest value, lowest
-effort, and partly answered already.** ComfyUI now routes the tracked
-packed-sequence model's fused RMSNorm-plus-rotary through
-`comfy_kitchen` directly, in place on the QKV buffer, at the same call
-site that then invokes attention. This fork ships `fused_rope_split`,
-which is the same class of helper -- and which the memory record already
-notes was built for a sub-one-percent share before anyone measured the
-share. The library's advertised capability set also overlaps our
-quantisation helpers.
+**D1. Overlap with the consumer's kernel library. PARTLY DONE
+2026-09-08 -- the first item is retired.** ComfyUI routes rotary
+embedding through `comfy_kitchen` on **both** tracked models: the LTX
+path via `apply_rope_split_half`, the packed audio-video path via
+`rms_rope_split_half_`, the latter fused with RMSNorm and applied in
+place on the QKV buffer at the same call site that then invokes
+attention. That is strictly more than this fork's `fused_rope_split`
+did, and nothing imported ours. It shipped on a "structural kernel-side
+gap" claim the consumer retracted after measuring the share, and was
+kept on the argument that a future DiT consumer might adopt it -- an
+argument the library's presence in core has now closed. Removed in
+v0.7.14 under the Backlog trigger that already existed for it.
 
-The dig: enumerate that capability set against this fork's non-attention
-exports and ask, per primitive, whether we are maintaining something the
-consumer already gets for free and better placed. Expect the answer to
-be yes for the rotary helper. Retiring a primitive is a real win --
-`docs/downstream_symbols.md` has the pre-removal checklist, and the
-underscore-symbol audit exists precisely so this can be done safely.
+**The remaining dig is the rest of that capability set.** The library
+advertises quantisation and normalisation entry points that overlap
+this fork's helpers. Enumerate them against our non-attention exports
+and ask, per primitive: is this something the consumer already gets,
+better placed, from a library it already loads? `sage_ffn` is the next
+one to examine, though it is not a like-for-like duplicate -- no fused
+fp8 MLP appears in that capability set -- so expect the answer there to
+turn on measurement rather than on redundancy.
+
+**The principle, since it generalises past this repo:** an overlap that
+only duplicates is not neutral. It is a second thing to keep correct
+across upstream churn, a second place for a claim to go stale, and a
+tempting comparand that flatters whichever side was tuned more
+recently. Attention is where this fork's leverage is; helpers that a
+first-party library does in-place at the call site are not.
 
 **D2. That library is also the binding model worth copying.** It carries
 no framework symbols in its dynamic dependencies and registers its ops

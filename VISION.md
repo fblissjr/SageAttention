@@ -26,7 +26,7 @@ area cap makes 1:1 three times cheaper than 16:9, that `smooth_k` is a
 wash. None of it required writing a fast kernel.
 
 **3. A place to test ideas.** `sage_ffn`, `sageattn_partitioned`,
-`fused_rope_split`, the torch.compile spike. Kept because negative results
+the torch.compile spike. Kept because negative results
 are worth keeping, not because they shipped wins.
 
 **What this repo has never done is make anything faster.** Every speed
@@ -63,7 +63,7 @@ from Megakernels / ThunderKittens etc.) -- is on the table.
 The work surface, by layer:
 
 - **Kernels** -- `sageattention/` (attention) + `sageattention/triton/`
-  (sage_ffn, fused_rope_split). New kernel work lands here on sm89-
+  (sage_ffn). New kernel work lands here on sm89-
   bounded scope: CUDA + Triton, fp8 / int8 quantized where the
   workload supports it, mature `mma.sync` + `cp.async` primitives
   (no TMA / WGMMA / TMEM).
@@ -200,7 +200,7 @@ and we add a perceptual layer.
 
 - **A kernel library for ComfyUI sm89 workloads.** A coherent set of
   primitives -- attention (sage's founding module) + `sage_ffn` (v0.6
-  fp8 MLP) + `fused_rope_split` (the fp8/int8 quant lives inside these
+  fp8 MLP) (the fp8/int8 quant lives inside these
   kernels, not as separately-importable ops) -- with a documented
   import surface (the de-facto public symbols in
   `docs/downstream_symbols.md`) that its sibling consumer node pins

@@ -690,7 +690,7 @@ Three plausible structures for new kernel work beyond sage attention
 
 **Resolved 2026-05-23 (user, library reframe):** option 2 (subpackages
 in one library). This repo IS the kernel library; new primitives land
-as modules within it (`sage_ffn`, `fused_rope`, future VAE / cross-modal;
+as modules within it (`sage_ffn`, future VAE / cross-modal;
 the fp8/int8 quant stays inside the kernels, not as separate ops), NOT as
 adjacent repos. The library is consumed by its sibling consumer node (the
 audio-loop node today; more if the ecosystem grows) via a documented

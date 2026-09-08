@@ -89,9 +89,6 @@ rather than "validated."
   multi-slice partition patterns; correctness verified, peak HBM
   benefit is workload-dependent and currently looks small (see
   `tests/bench/partitioned_mask_phase0/` for the measurement).
-- **`fused_rope_split(q, k, freqs_cis)`** -- clean-room Triton
-  kernel matching the LTX split-rotary-embed convention; standalone
-  helper, not bolted into `sageattn()`.
 - **`sage_ffn(x, w1, s1, w2, s2, b1=None, b2=None)`** (v0.6) -- a
   two-kernel fp8-native fused MLP for DiT FFN blocks with per-tensor
   fp8 (E4M3FN) weights. Targets LTX 2.3 distilled. **Ships as a
@@ -528,7 +525,6 @@ sageattention/          # Python package
   core.py               # dispatcher + Python entry points
   triton/               # JIT Triton kernels
     fused_mlp_fp8.py    # sage_ffn -- v0.6 two-kernel fp8 fused MLP
-    fused_rope.py       # fused_rope_split helper
   sm89_compile.py       # torch.library.custom_op schemas for sm89 kernels
   quant.py              # quantization helpers
 csrc/qattn/             # CUDA kernel sources (sm80 + sm89)

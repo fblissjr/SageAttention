@@ -40,7 +40,7 @@ time is almost entirely attention.
 Three load-bearing surfaces:
 
 1. **Kernels.** sage attention (the historical core: INT8 Q/K + FP8
-   PV) + `sage_ffn` (v0.6 fp8 MLP) + `fused_rope_split`. Forward:
+   PV) + `sage_ffn` (v0.6 fp8 MLP). Forward:
    VAE fp8 fusion, cross-modal attention coverage, GeGLU sage_ffn
    extension, persistent-CTA rewrites. All sm89-bounded; CUDA +
    Triton; `mma.sync` + `cp.async` primitives (no TMA / WGMMA /
@@ -97,8 +97,6 @@ work surface:
   two-kernel fp8 MLP primitive for DiT FFN blocks. Ships as
   completeness primitive (Cell C verdict per CHANGELOG); forward
   work includes persistent-CTA hybrid + GeGLU extension.
-- `sageattention/triton/fused_rope.py` -- `fused_rope_split`, a
-  LTX-shape split-rotary-embed helper.
 - Future: VAE fp8 fusion, cross-modal attention coverage, additional
   fp8 primitives as the load-bearing measurement justifies them.
 

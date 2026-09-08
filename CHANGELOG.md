@@ -542,42 +542,6 @@ avoid intermediate materialization?" -- which today the consumer's
 evidence already resolves as "no, gap is structural to int8/fp8
 quant"). Today: not load-bearing.
 
-### Block-along-T optimization on `fused_rope_split` Triton kernel
-
-`/simplify` efficiency review (2026-05-01) flagged that
-`_rope_qk_split_kernel` launches one program per `(t, h, b)` --
-733k programs at the LTX video shape (B=1, H=32, T=22932). Each
-program does ~1024 bytes total I/O on D//2=64 elements, below the
-bf16 cache-line sweet spot. Block along T with `BLOCK_T=8` or `16`
-(one program per `(b, h, t_block)`, inner loop over `t`) cuts the
-grid 8-16x and amortizes program-launch overhead.
-
-Size estimate: ~half a day (kernel restructure + perf
-measurement against a new `tests/bench_fused_rope.py` micro-bench).
-
-**Trigger to act:** a future workflow brings `fused_rope_split`
-above 5% of GPU time. Today: 0.55% on the consumer's iclora
-workflow (their 21:02Z memo) -- not worth the perf-measurement
-work.
-
-### `fused_rope_split` removal candidate
-
-v0.5.3 shipped the primitive on the strength of a comparison-doc
-finding ("only structural kernel-side gap vs KJ's per-block
-patch") that turned out to overstate the value -- consumer
-measured RoPE at 0.55% of GPU time, retracted the ask. Kernel
-earns its space as a sage-fork primitive (low maintenance, ~280
-LOC self-contained, available for future DiT consumers), but the
-immediate ROI is zero. Same disposition as `sageattn_warmup`:
-candidate for removal if no consumer adopts within ~6 months.
-
-**Trigger to act:** by 2026-11-01, audit `coderef/` for any
-consumer importing `sageattention.fused_rope_split`. If none, drop
-the kernel + tests + CLAUDE.md inventory entry in a focused
-deletion arc. Lesson: see `feedback_walltime_before_kernel_day`
-memory entry -- ask for wall-time contribution before kernel-day
-spend on a "kernel-side gap" finding.
-
 ## Decision log
 
 Investigations that closed without action. Recorded so we don't
@@ -1083,6 +1047,45 @@ sufficient.
 > and never confirms an H3 claim. `sage_ffn` and the whole FFN line are
 > LTX-motivated throughout.
 
+
+### v0.7.14 -- 2026-09-08  (`fused_rope_split` removed: the consumer's own library does it better)
+
+Deletes `sageattention/triton/fused_rope.py`, `tests/test_fused_rope.py`,
+the package export, and the two Backlog entries that tracked it.
+
+**This is a trigger firing, not a judgement call.** The Backlog already
+carried a removal candidate for this primitive with an explicit test: audit
+`coderef/` for a consumer importing it, and if none, drop the kernel, tests
+and inventory entry. The audit ran clean -- nothing imports it anywhere in
+the coordinated set, and it was not on the de-facto contract list in
+`docs/downstream_symbols.md`, so the pre-removal checklist had nothing to
+coordinate.
+
+**What changed since the entry was written is the reason it stayed.** It
+shipped in v0.5.3 on a comparison-doc claim that it was the "only structural
+kernel-side gap" against another patch; the consumer retracted that after
+measuring RoPE at 0.55% of GPU time. It was kept anyway on the argument that
+it was cheap to hold and might serve a future DiT consumer. That argument is
+now closed: ComfyUI routes this operation through `comfy_kitchen` on **both**
+models this fork tracks -- LTX via `apply_rope_split_half`, the packed
+audio-video model via `rms_rope_split_half_`. The second is fused with
+RMSNorm and applied **in place on the QKV buffer**, at the same call site
+that then invokes attention. That is strictly more than ours did, better
+placed, and maintained by someone else. A future DiT consumer reaches for
+that, not for us.
+
+**Why remove rather than keep something harmless.** An overlap that only
+duplicates is not free. It is a second implementation to keep correct across
+upstream churn, a second place for a documented claim to go stale -- which
+this session spent its time proving is the failure mode here, see
+`docs/drift_audit_and_directions.md` -- and a comparand that flatters
+whichever side was tuned more recently. This fork's leverage is attention on
+sm89. A helper that a first-party library performs in place at the call site
+is not leverage, and holding it costs more than the zero it returns.
+
+The v0.5.3 entry and the 0.55% measurement stay in the record. The lesson is
+already a memory entry: ask for wall-time contribution before spending a
+kernel day on a reported "kernel-side gap".
 
 ### v0.7.13 -- 2026-09-08  (measurement provenance: which sage produced these numbers)
 

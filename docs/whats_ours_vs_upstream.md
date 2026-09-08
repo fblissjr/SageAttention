@@ -13,9 +13,8 @@ additions (we own the contract).
   sm89_qk_int8_sv_f8_*.cu}`, `csrc/fused/`, `pyproject.toml`,
   `tests/test_sageattn.py`, `tests/test_flashattn{2,3}.py`.
 - `sageattention/` mostly unmodified except
-  `sageattention/triton/attn_qk_int8_per_block.py` (we added autotune),
-  `sageattention/triton/fused_rope.py` (v0.5.3, our addition), and
-  `sageattention/triton/fused_mlp_fp8.py` (v0.6.0, our addition --
+  `sageattention/triton/attn_qk_int8_per_block.py` (we added autotune)
+  and `sageattention/triton/fused_mlp_fp8.py` (v0.6.0, our addition --
   the `sage_ffn` primitive).
 - `setup.py` mostly unmodified except line 152 (sm89 -> SM80 build gate)
   + v0.5.0 trims (Hopper SM90 block, CUDA-12.3-for-9.0 check, Windows
@@ -89,18 +88,18 @@ additions (we own the contract).
   frozenset silently breaks consumer `assert kernel in
   KNOWN_KERNEL_NAMES` validators. The constant + set + Literal trio
   is the public contract.
-- `sageattention.fused_rope_split(q, k, freqs_cis, *, use_triton=True)
-  -> tuple[Tensor, Tensor]` -- v0.5.3 fused split-RoPE primitive.
-  Clean-room Triton kernel matching LTX's `apply_split_rotary_emb`;
-  falls back to torch reference on non-CUDA / non-split-pe / shape
-  mismatch / `use_triton=False`. Lives in
-  `sageattention/triton/fused_rope.py`. v1 supports the LTX split-pe
-  convention only; interleaved variants silently fall back.
-  **Status (verified 2026-05-01):** consumer measured RoPE at 0.55%
-  of GPU time on the iclora workflow, so immediate ROI is ~zero --
-  candidate for removal at the next deletion arc if no consumer
-  adopts within ~6 months (same disposition as `sageattn_warmup`).
-  Test: `tests/test_fused_rope.py` (3 CPU + 7 GPU + export-check).
+- `sageattention.fused_rope_split` -- **REMOVED 2026-09-08** (shipped
+  v0.5.3). A clean-room Triton split-RoPE primitive for LTX. It was
+  built on a "only structural kernel-side gap" finding that the
+  consumer then retracted after measuring RoPE at 0.55% of GPU time,
+  and it was kept on the argument that it might serve a future DiT
+  consumer. That argument expired: ComfyUI now routes this operation
+  through `comfy_kitchen` on **both** tracked models -- LTX via
+  `apply_rope_split_half`, the packed audio-video model via
+  `rms_rope_split_half_`, the latter fused with RMSNorm and applied in
+  place on the QKV buffer, which is strictly more than ours did. The
+  pre-removal checklist ran clean: nothing in `coderef/` imported it,
+  and it was not on the de-facto contract list above. See v0.7.14.
 - `sageattention/triton/attn_qk_int8_per_block.py` -- `@triton.autotune`
   over `num_warps` and `num_stages`. Zero immediate perf delta on
   sm89 + LTX shapes (hardcoded config was already optimal) but
