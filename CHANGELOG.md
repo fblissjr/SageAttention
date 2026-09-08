@@ -111,6 +111,30 @@ Recorded: 2026-08-05, while validating the Triton fix at 362 frames.
 Real open TODOs. Each has an explicit trigger-to-act; we don't do these
 speculatively.
 
+### Re-test whether the `KNOWN_BAD_CUDA` guard in `build.sh` is still needed
+
+`build.sh` auto-switches away from the nvcc release recorded in
+`KNOWN_BAD_CUDA` because its cudafe++ front-end miscompiled the torch
+headers of the day (the `List_inl.h` "need 'typename'" failure; mechanism
+and the same-TU A/B are under v0.6.6). That verdict was reached against
+torch headers that have since been replaced -- the C++20 bump in v0.7.8
+means every TU now compiles under a different language standard as well.
+A single torch-including TU compiles clean under the guarded nvcc with
+the current headers, which is suggestive and nothing more: one TU is not
+the seven-kernel build, and the guard is cheap while it stands.
+
+**Trigger to act:** wanting the guarded toolkit for a real reason (a
+feature only it exposes, or the good toolkit being uninstalled). Then run
+a full `./build.sh clean` with `SAGE_SKIP_CUDA_GUARD=1` as its own arm,
+compare against a build on the good toolkit, and if it passes, drop the
+version from `KNOWN_BAD_CUDA` and retire the memory entry that records
+the breakage. Do not retire it on the strength of a single TU.
+
+**Note for whoever picks this up:** the working tree may carry a local
+edit blanking `KNOWN_BAD_CUDA`. That disables the guard silently and is
+not the committed state -- check `git diff build.sh` before concluding
+the guard is off by design.
+
 ### Drop `per_channel_fp8`'s full-size bf16 transpose buffer -- SUPERSEDED 2026-08-06, not withdrawn
 
 **Superseded by consumer-side head-group chunking. Do not start this as a
@@ -1021,6 +1045,44 @@ sufficient.
 > and never confirms an H3 claim. `sage_ffn` and the whole FFN line are
 > LTX-motivated throughout.
 
+
+### v0.7.8 -- 2026-09-08  (build: C++17 -> C++20, forced by torch)
+
+**Build-only change.** Both `-std=` flags in `setup.py` (the `cxx` list and
+`NVCC_FLAGS_COMMON`) move from C++17 to C++20. No kernel source changed.
+
+**Why.** Torch made C++20 its floor for building against its headers:
+`torch/csrc/api/include/torch/all.h` and `ATen/ATen.h` open with an
+`#error` on `__cplusplus < 202002L`. Under C++17 every translation unit
+that reaches `torch/extension.h` fails there -- all 7 sm89 `.cu` files,
+the sm80 kernel, `csrc/fused/fused.cu`, and all three pybind `.cpp`
+files -- so the failure is total, not partial, and it is a property of
+the installed torch rather than of the venv. Torch's own
+`torch/utils/cpp_extension.py` had already moved its JIT paths to
+`-std=c++20`. There is no C++17 build against this torch; the flag is
+the whole fix.
+
+**Why unconditional rather than version-gated.** `setup.py` already
+refuses to build sm89 below the CUDA floor it asserts there, and every
+installed toolkit at or above that floor takes `-std=c++20` (checked with
+`nvcc --help`; the only installed toolkit that does not is 11.8, far
+below the floor). So no supported configuration of this fork can want
+C++17, and a version switch would add a branch with no reachable arm.
+
+**Verification.** Full `./build.sh clean` against the consumer venv:
+all three extensions compile and import (no C++20 source-compat fallout
+in `csrc/` -- the standard bump reaches device compilation, so this is
+a real check and not a formality). `tests/test_sageattn_ltx_shapes.py
+--check-regression` fires exactly the two pre-existing stale-baseline
+flags on `ltx23_video_cross_text_kv226 / auto`, which date from the
+v0.5.5 mask-routing change and are already recorded under that entry;
+the load-bearing self-attn row clears its speedup floor. Nothing new
+fired.
+
+**Toolkit note.** Built with `CUDA_HOME` pinned to a known-good toolkit
+so the standard bump was the only variable. Whether the `KNOWN_BAD_CUDA`
+guard in `build.sh` is still needed under these torch headers is a
+separate question and is not answered here -- see the Backlog entry.
 
 ### v0.7.7 -- 2026-08-13  (`get_dispatch_counts`: coverage, not just reachability)
 

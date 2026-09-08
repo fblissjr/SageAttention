@@ -38,11 +38,11 @@ if not SKIP_CUDA_BUILD:
 
     # Compiler flags. Linux-only build; Windows wheel paths upstream
     # are not validated on this fork.
-    CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
+    CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++20", "-DENABLE_BF16"]
 
     NVCC_FLAGS_COMMON = [
         "-O3",
-        "-std=c++17",
+        "-std=c++20",
         "-U__CUDA_NO_HALF_OPERATORS__",
         "-U__CUDA_NO_HALF_CONVERSIONS__",
         "--use_fast_math",
