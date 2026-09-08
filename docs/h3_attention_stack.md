@@ -24,8 +24,11 @@ per-sub-module table at two clip lengths on the path that ships, and
 here; this document goes stale, that one is dated and re-runnable.
 
 **Status of the long-standing figure.** The share this repo quoted for
-months was measured at the top of H3's trained range. **It is not an
-illegal length, and this repo said otherwise for three weeks.** 362 frames is the top of H3's trained range, not an illegal length. The consumer withdrew the "345 is the largest legal count" claim on 2026-08-16 as an owner decision: 345 is the largest count *diffusers* emits, a fact about diffusers, while ComfyUI's node accepts far more and names ~124-362 as the trained range. This repo carried the withdrawn version for three weeks and propagated it on 2026-09-08.
+months was measured at the top of H3's trained range, and this repo called
+it illegal for three weeks.
+
+**The precise position.** At 24 fps 15.0 s is 360 frames exactly, and H3's 17n+5 grid straddles it: 345 lands at 14.375 s, the next value 362 at 15.083 s. So "362 exceeds 15.0 s" is arithmetically true and the original note was right about that. What does not follow is that 362 is unrenderable: nothing on the ComfyUI path enforces a 15.0 s limit -- its node accepts far more and names ~124-362 as the trained range -- and the consumer recorded on 2026-08-16 that the 345 bound is a fact about *diffusers*, which clamps there because 345 is the largest grid value at or under 15.0 s. So 362 is out of bounds under diffusers and in bounds under the path this fork targets, and a measurement taken there is at a demanding but renderable shape.
+
 The profile reproduces the figure closely at a slightly shorter length on
 the same path, so the number was sound. What survives as fair criticism is
 only that it was quoted as though length-independent.

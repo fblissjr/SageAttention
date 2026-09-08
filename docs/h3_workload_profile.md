@@ -66,10 +66,12 @@ rises steeply with length**, because attention is O(S^2) where everything
 else in the block is O(S). A single number for "H3's attention share" is
 therefore not a well-formed claim -- quote it with a sequence length.
 
-**The long-standing figure is vindicated, and my criticism of it was
-half wrong.** I attacked it partly for being measured at an illegal length.
-It was not: 362 frames is the top of H3's trained range, not an illegal length. The consumer withdrew the "345 is the largest legal count" claim on 2026-08-16 as an owner decision: 345 is the largest count *diffusers* emits, a fact about diffusers, while ComfyUI's node accepts far more and names ~124-362 as the trained range. This repo carried the withdrawn version for three weeks and propagated it on 2026-09-08. The long row above reproduces the figure
-independently at a slightly shorter length on the same path, so the number
+**The long-standing figure is vindicated, and my criticism of it was half
+wrong.** I attacked it partly for being measured at an illegal length.
+
+**The precise position, third revision of this fact in one day.** At 24 fps 15.0 s is 360 frames exactly, and H3's 17n+5 grid straddles it: 345 lands at 14.375 s, the next value 362 at 15.083 s. So "362 exceeds 15.0 s" is arithmetically true and the original note was right about that. What does not follow is that 362 is unrenderable: nothing on the ComfyUI path enforces a 15.0 s limit -- its node accepts far more and names ~124-362 as the trained range -- and the consumer recorded on 2026-08-16 that the 345 bound is a fact about *diffusers*, which clamps there because 345 is the largest grid value at or under 15.0 s. So 362 is out of bounds under diffusers and in bounds under the path this fork targets, and a measurement taken there is at a demanding but renderable shape.
+
+The long row above reproduces the figure independently at a slightly shorter length on the same path, so the number
 was sound. What survives as fair criticism is only that it was quoted as
 though length-independent, and that the larger version circulating in
 conversation was never the recorded one.
