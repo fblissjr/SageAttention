@@ -1,1035 +1,197 @@
 # sage-fork
 
-L1 routing index. Detailed material lives in `docs/` (committed) and
-`internal/` (gitignored); see "Deeper context" at the bottom.
+Routing index. This file holds **scope, commands, and rules that fit on
+one line**. Everything else -- evidence, worked examples, measurements,
+history -- lives in `docs/` (committed) or `internal/` (gitignored) and
+is linked below. If a rule needs a paragraph to justify it, the rule
+belongs here and the paragraph belongs in `docs/`.
 
-## TLDR
+Rewritten 2026-09-08 from a 1000-line version. If you are looking for
+something that used to be here, it is in `docs/` and named in the map at
+the bottom; `git log -p CLAUDE.md` shows exactly what moved where.
 
-> **SCOPE, 2026-09-08: H3 is the only current target. LTX is parked.**
-> The owner is not running LTX for the time being, so nothing is coded or
-> tested *for* LTX: its bench still runs and still reports (the kernels
-> are shared, and it covers a second head config plus a masked path H3
-> never exercises), but it does not gate `tests/run_all.sh` and it no
-> longer defines the load-bearing metric -- that is now the H3 row. Rank
-> every perf bet against H3. The LTX-motivated surfaces are at zero
-> priority by consequence, not deleted: `sage_ffn` and its whole forward
-> line, and the v0.5.5 native-mask kernel, which H3 cannot reach at all.
-> "Parked" is reversible; re-blocking the LTX gate is one `exit` away.
-> Everything below still describes both models, because both still exist
-> in the code.
->
-> **Two supported model workloads, and they are not interchangeable.**
-> **LTX 2.3** (video, since ~2026-04) and **MiniMax H3** (packed
-> audio-video, since **2026-08-04**, commit `3f3a121`). Flux / Z-Image
-> are image-gen shapes in the bench, not an optimization target.
->
-> **H3 did not exist in this repo before 2026-08-04.** Every measurement,
-> rtol fingerprint, decision entry, and doc dated earlier describes **LTX
-> 2.3 or Z-Image and nothing else** -- it cannot corroborate an H3 claim,
-> however similar the mechanism looks. The two differ in ways that change
-> results: H3 has exactly one attention call site over a packed
-> `[text | refs | audio | video]` sequence with `mask=None` hardcoded
-> (`comfy/ldm/minimax/model.py:199`, re-checked 2026-09-08) and no
-> cross-attention at all, where
-> LTX has masked cross-attn as a headline shape. **Label the model on
-> every number.** See Conventions.
+## Scope
 
-**Mission:** sm89 kernel optimization for ComfyUI consumer workloads.
-The repo name is "sage-fork" for historical reasons (started as a
-local fork of `woct0rdho/SageAttention`, itself a fork of
-`thu-ml/SageAttention`); the substantive scope is broader. See
-`VISION.md` for the full framing.
+**MiniMax H3 is the only current target. sm89 / Ada / 4090 only.**
 
-We optimize the kernels that run when ComfyUI consumers fire their
-workflows on sm89 / RTX 4090. Anchored in DiT-class diffusion. The
-multi-modal expansion is **not** forward-looking any more -- MiniMax
-H3 arrived 2026-08-04 and is a current target alongside LTX 2.3 (see
-`VISION.md` for the full scope framing). No kernel-class non-goal --
-attention, FFN, VAE, cross-modal, anything else that shows up in a
-render hot loop is fair game on sm89, **but rank it against a specific
-model**: the FFN line is LTX-motivated and buys H3 little, since H3's
-time is almost entirely attention.
+- **LTX 2.3 is parked** (2026-09-08). Nothing is coded or tested *for*
+  it. Its bench still runs and reports, because the kernels are shared
+  and it covers a second head config plus a masked path H3 cannot reach
+  -- but it does not gate `tests/run_all.sh` and does not define the
+  load-bearing metric. Re-blocking is one `exit` away in `run_all.sh`.
+- **Zero priority by consequence:** `sage_ffn` and the whole FFN line,
+  and the v0.5.5 native-mask kernel. Both LTX-motivated; H3's time is
+  almost entirely attention and it never passes a mask.
+- Flux / Z-Image are bench shapes, not targets.
+- Other archs fall back to the sm89 kernel and are not tested. No
+  Hopper/Blackwell kernels (removed v0.5.0). Linux + source build only.
+- **Anything dated before 2026-08-04 describes LTX or Z-Image**, not H3.
+  It can corroborate a pattern; it cannot confirm an H3 result.
 
-Three load-bearing surfaces:
+H3 shape: one attention call site over a packed
+`[text | refs | audio | video]` sequence, `mask=None` hardcoded
+(`comfy/ldm/minimax/model.py:199`, re-checked 2026-09-08), no
+cross-attention.
 
-1. **Kernels.** sage attention (the historical core: INT8 Q/K + FP8
-   PV) + `sage_ffn` (v0.6 fp8 MLP). Forward:
-   VAE fp8 fusion, cross-modal attention coverage, GeGLU sage_ffn
-   extension, persistent-CTA rewrites. All sm89-bounded; CUDA +
-   Triton; `mma.sync` + `cp.async` primitives (no TMA / WGMMA /
-   TMEM since those are sm90+).
-2. **Bench + methodology.**
-   `tests/test_sageattn_ltx_shapes.py` is the load-bearing
-   attention measurement; `tests/bench_sage_ffn_shapes.py` is the
-   sage_ffn measurement; new primitives add their own surfaces.
-   `docs/perf_research_framework.md` codifies how we read the
-   numbers: load-bearing metric, synthetic-vs-in-pipeline 2x2 matrix
-   (Cell A/B/C/D), evidence ladder, rung-2 silent-fallback-pattern
-   enumeration, disprove-test discipline.
-3. **ComfyUI integration patterns.**
-   `sageattention.extract_fp8_weight_and_scale` (v0.6.4) shims the
-   four known fp8 storage conventions; the cross-clone memo protocol
-   coordinates with the audio-loop consumer-side claude; the
-   wrapper-discipline rules codify what every kernel-replacement
-   consumer node needs to handle.
+Mission and forward directions: `VISION.md`, `docs/roadmap.md`.
 
-**Hard constraint: sm89 / Ada / 4090 only.** Other archs compile and
-run via the dispatcher's sm100/sm120/sm121 fallback to the sm89
-kernel, but we don't test or debug them. We do not carry
-Hopper/Blackwell-specific kernels (all removed in v0.5.0). Windows
-install paths are gone; build is Linux+source only.
+## Build
 
-**Editable install** is what ships kernel changes to consumers. The
-packaging-regression fix in setup.py is the load-bearing reason this
-fork exists at all -- without it, downstream ComfyUI consumers
-couldn't compile sage from source on Ada. Everything else is built
-on top.
-
-## Architecture
-
-CUDA extension + Triton + Python wrapper covering attention, fused
-MLP, and ComfyUI integration shims. Relevant pieces, organized by
-work surface:
-
-**Attention kernels:**
-
-- `sageattention/core.py` -- `sageattn()` top-level dispatch. On
-  sm89 + CUDA >= 12.8, picks `sageattn_qk_int8_pv_fp8_cuda` with
-  `pv_accum_dtype="fp32+fp16"` (SageAttention2++).
-- `csrc/qattn/pybind_sm80.cpp` + `qk_int_sv_f16_cuda_sm80.cu` --
-  SM80 kernel (INT8 QK + FP16 PV). Forward-compatible to Ada.
-- `csrc/qattn/pybind_sm89.cpp` + `sm89_qk_int8_sv_f8_*.cu` -- SM89
-  kernel set (INT8 QK + FP8 PV, multiple accum variants).
-- `sageattention/triton/` -- JIT Triton kernels. Mask-correct on
-  all archs (the only mask-correct path before v0.5.5; still gates
-  archs that haven't gained native CUDA mask support).
-
-**Non-attention kernels (v0.6+):**
-
-- `sageattention/triton/fused_mlp_fp8.py` -- `sage_ffn`, the
-  two-kernel fp8 MLP primitive for DiT FFN blocks. Ships as
-  completeness primitive (Cell C verdict per CHANGELOG); forward
-  work includes persistent-CTA hybrid + GeGLU extension.
-- Future: VAE fp8 fusion, cross-modal attention coverage, additional
-  fp8 primitives as the load-bearing measurement justifies them.
-
-**ComfyUI integration patterns:**
-
-- `sageattention/comfyui_compat.py` -- `extract_fp8_weight_and_scale`
-  (v0.6.4), centralizes the four known ComfyUI fp8 storage
-  conventions so future consumers don't re-derive the probe.
-  Generalization candidate (Tier 2.5) as new quant conventions
-  surface.
-- Cross-clone memo protocol in `internal/`'s memo files coordinates
-  with the audio-loop consumer-side claude. Discipline rules in
-  `docs/perf_research_framework.md`.
-
-**Build + install:**
-
-- `setup.py` -- builds `_qattn_sm80`, `_qattn_sm89`, `_fused`. Our
-  patch at line 152 adds sm89 to the SM80 build gate.
-- `build.sh` -- editable-install wrapper. Enforces `VIRTUAL_ENV`,
-  `--python` pin, MAX_JOBS cap, an interpreter-scoped `clean`, and a
-  dormant known-bad-toolkit guard -- see Install / build.
-
-Full upstream-vs-ours inventory in `docs/whats_ours_vs_upstream.md`.
-Mission and forward directions in `VISION.md` + `docs/roadmap.md`.
-
-## Install / build
-
-Always active-venv. Never bare `python`. Use `${VIRTUAL_ENV}/bin/python`
-or `${VENV}/bin/python` directly. `python -m pip freeze` fails on
-uv-managed venvs -- use `VIRTUAL_ENV=<venv> <venv>/bin/uv pip freeze`
-for env snapshots.
+Always an active venv. Never bare `python`. `python -m pip freeze` fails
+on uv venvs -- use `VIRTUAL_ENV=<venv> <venv>/bin/uv pip freeze`.
 
 ```bash
 source /path/to/venv/bin/activate
-cd /path/to/sage-fork
-./build.sh                # build + install editable into $VIRTUAL_ENV
-./build.sh clean          # wipe THIS interpreter's artifacts first, then build
-./build.sh clean-all      # wipe every interpreter's artifacts, then build
-./build.sh verify         # import-check only, no rebuild
+./build.sh              # build + editable install into $VIRTUAL_ENV
+./build.sh clean        # wipe THIS interpreter's artifacts, then build
+./build.sh clean-all    # wipe every interpreter's artifacts, then build
+./build.sh verify       # import-check only
 ```
 
-**More than one venv can share this checkout, and `clean` is scoped so
-they can.** The `.so` files live in the source tree every editable
-install points at, and they are tagged per interpreter
-(`cpython-313` / `cpython-314`), not abi3 -- so venvs on different Python
-versions coexist only by each leaving its own tagged `.so` here. Plain
-`clean` removes just the tag it is about to rebuild; `clean-all` is the
-blanket wipe, after which every *other* venv needs a plain `./build.sh`
-to get its kernels back. Getting this wrong is silent from the affected
-venv's side: it fails at `from . import _fused` with nothing in its own
-environment having changed.
+- **Use `./build.sh`, never `uv pip install -e . -U`** -- the bare form
+  silently upgrades torch over ComfyUI's pinned build.
+- **The `.so` is ABI-bound to torch.** Upgrade torch, rebuild sage.
+- **C++20 is a hard floor**, set by torch's headers. A checkout from
+  before v0.7.8 cannot build against torch >= 2.14 at all; the symptom
+  is every file failing identically inside `torch/extension.h`.
+- **Any CUDA toolkit your torch accepts.** The `KNOWN_BAD_CUDA` guard is
+  present but empty; 13.2 and 13.3 were measured bit-identical. Re-arm
+  it if a future nvcc breaks the torch headers.
+- **Several venvs can share this checkout.** Extensions are tagged per
+  interpreter, not abi3, so plain `clean` removes only the tag it is
+  rebuilding. `clean-all` then needs a plain `./build.sh` per other venv,
+  or they fail at `from . import _fused` with nothing else changed.
+- Restart ComfyUI after a build.
+- Not ours but shares the venv: **torchaudio raises where torch only
+  warns** on a CUDA minor mismatch, and takes ComfyUI's startup with it.
 
-**Run `./build.sh` (or `./build.sh clean`), NOT `uv pip install -e .
--U`.** build.sh pins the active venv, caps `MAX_JOBS`, holds torch fixed
-(`--no-deps --force-reinstall`), and auto-selects a working CUDA
-toolkit. The bare `uv pip install -e . -U` form silently upgrades torch
-over ComfyUI's pinned build; if you upgrade torch deliberately, rebuild
-sage afterward (the `.so` is ABI-bound to torch). Build is 60-90s on an
-8-core box with MAX_JOBS=8.
-
-**CUDA toolkit: pick either, they are equivalent here.** `build.sh`'s
-`KNOWN_BAD_CUDA` guard is present but **empty** as of v0.7.9, so the
-newest toolkit on `PATH` builds. 13.2 and 13.3 were measured producing
-**bit-identical** kernel output across both fp8 PV-accum variants, the
-sm80 kernel and the masked `kGeneral` path, and sm89 is a fixed target
-so a toolkit bump adds no issuable instructions -- expect neutral, and
-it measured neutral. Override with `CUDA_HOME=/usr/local/cuda-X.Y`.
-Re-arm the guard by putting a release back in `KNOWN_BAD_CUDA`
-(space-delimited both sides) if a future nvcc breaks the torch headers
-again, which is the failure this mechanism exists for; v0.6.6 records
-the one time it did and v0.7.9 records why that expired.
-
-**Torch sets the C++ standard, and it is a hard floor.** `setup.py`
-compiles at `-std=c++20` because torch >= 2.14's headers `#error` below
-`__cplusplus 202002L` (`torch/all.h`, `ATen/ATen.h`). A checkout from
-before v0.7.8 cannot build against such a torch at all -- every
-translation unit that reaches `torch/extension.h` fails, so the symptom
-is a wall of identical errors rather than one bad file.
-
-**torchaudio is stricter than torch about CUDA.** Not our dependency,
-but it shares the venv: torch only *warns* on a minor CUDA mismatch
-while torchaudio *raises* at import and takes ComfyUI's startup with it.
-So a from-source torchaudio must be built against torch's exact CUDA
-minor even while sage is free to use any.
-
-After a build, restart ComfyUI to load the fresh `.so` files.
-
-Confirm install (path should point at our source tree):
+## Test
 
 ```bash
-${VIRTUAL_ENV}/bin/python -c "import sageattention, os; print(os.path.dirname(sageattention.__file__))"
-```
-
-Post-build, run `${VIRTUAL_ENV}/bin/python tests/test_sageattn_ltx_shapes.py`
-once before the first production LTX gen. Side effect: populates
-Triton's on-disk autotune cache for every LTX shape the test covers,
-so the first gen after a rebuild skips the ~100-500ms per-new-shape
-autotune warmup. `./build.sh` invalidates this cache.
-
-**First `--check-regression` after `./build.sh` is expected to fail**
-on triton-autotune-pending rows (200-300% drift on sub-millisecond
-rows is typical -- autotune sweep dominates the median). Run the
-bench once without the flag to populate the cache, then re-run with
-`--check-regression` for the gate.
-
-### `tests/bench_e2e_ltx.py` warmup auto-detection
-
-The e2e bench has `--warmup {auto,always,never}` (default `auto`).
-Auto-mode skips the warmup-and-discard prompt only when BOTH:
-1. A non-empty `coderef/.../data/runs/<RUN_ID>/sage.jsonl` exists
-   on disk with mtime < 30 min, AND
-2. ComfyUI's `/history/1` HTTP endpoint returns a non-empty dict.
-
-Either signal alone is unreliable. If you suspect the auto-detection
-is wrong, pass `--warmup always` explicitly. Asymmetric-cost
-reasoning: false-positive (skip warmup when cold) -> cold-start
-measurement bias -> bench reads as "sage 0.5x SLOWER"; false-negative
--> wasted 250s. Always errs toward warmup.
-
-## Testing
-
-Standalone scripts (no pytest). Run against the installed sage in
-`$VIRTUAL_ENV`, not the source tree directly.
-
-```bash
-./tests/run_all.sh                     # env snapshot + ltx + h3 + image + spike
+./tests/run_all.sh                     # env snapshot + h3 + ltx + image + spike
 VENV=/path/to/venv ./tests/run_all.sh  # explicit venv
-
-# Individual:
-${VIRTUAL_ENV}/bin/python tests/test_sageattn_ltx_shapes.py
-${VIRTUAL_ENV}/bin/python tests/test_sageattn_ltx_shapes.py --check-regression
-${VIRTUAL_ENV}/bin/python tests/test_sageattn_h3_shapes.py
 ${VIRTUAL_ENV}/bin/python tests/test_sageattn_h3_shapes.py --check-regression
-${VIRTUAL_ENV}/bin/python tests/test_sageattn_image_shapes.py
-${VIRTUAL_ENV}/bin/python tests/spike_torch_compile.py
-${VIRTUAL_ENV}/bin/python tests/test_flashattn2.py     # if flash-attn installed
-${VIRTUAL_ENV}/bin/python tests/test_flashattn3.py
 ```
 
-Shape coverage is derivable -- run `tests/bench_workload_profile.py`
-against a recent consumer trace and read its "Coverage gaps" section.
-Bench-shape changes have their own discipline; see
-`docs/bench_discipline.md`.
+- **`tests/test_sageattn_h3_shapes.py` is the gate.** It decides whether
+  the suite passed. The LTX bench runs after it, non-blocking.
+- **The H3 gate covers speed, peak VRAM and cross-kernel fidelity. Not
+  accuracy** -- deliberately. Its baselines carry no rtol-vs-SDPA rows,
+  so the shared gate skips that check by construction.
+- **A synthetic-input accuracy number is not a measurement of anything
+  we ship.** `torch.randn` has no channel offset and no attention
+  structure, so softmax is near-uniform, the output is a near-cancelling
+  average, and element-wise error is dominated by cancellation. At H3 it
+  reads ~4x worse than reality. Speed, VRAM and fidelity are unaffected
+  and synthetic input is correct for those.
+- **H3 accuracy lives in `tests/spikes/spike_h3_real_activations.py`**,
+  on captured q/k/v. Run it rather than adding synthetic rows.
+- **First `--check-regression` after a build is expected to fail** on
+  triton-autotune-pending rows. Run once without the flag first.
+- GPU OOM mid-test usually means contention. Check `nvidia-smi` before
+  debugging.
 
-`tests/test_sageattn_ltx_shapes.py` is the load-bearing test. It
-characterizes accuracy AND speed per (shape, mode) using
-`SDPBackend.EFFICIENT_ATTENTION` as the reference (MATH backend
-OOMs at LTX self-attn scale). Soft-warns when mean_rtol > 0.10.
-Measures five sage kernels and three torch SDPA backends in one run,
-plus an `fp8++vs.triton` cross-kernel rtol row. The bench's `fp8_cuda`
-mode is `pv_accum_dtype="fp32+fp32"` (inst-buffer), NOT pure `fp32` --
-the pure-FP32 PV-accum config (SageAttention 2 / external-port
-comparand) is `pv_accum_dtype="fp32"` ->
-`qk_int8_sv_f8_accum_f32_fuse_v_scale_attn`; our default `fp8_cuda++`
-is `fp32+fp16`.
+## Rules
 
-**A synthetic-input accuracy number is not a measurement of anything we
-ship. Capture real q/k/v.** `torch.randn` has no channel offset (so
-`smooth_k` is inert), no attention structure (so softmax is near-uniform
-and the output is a near-cancelling average, which inflates every
-element-wise relative error), and no relationship to the activation
-magnitudes a trained model produces. Measured consequence at H3 config:
-the synthetic bench reports fp8++ **4x worse** than reality and the
-fp8-vs-fp16 gap **2x wider**. `tests/spikes/spike_h3_real_activations.py`
-is the harness; it takes `.pt` files of captured q/k/v and a
-throwaway hook on the consumer's attention call site produces them. Do
-that instead of adding synthetic rows.
-
-**The same trap applies harder to anything approximate.** A quantizer's
-error does not depend on attention having structure; a block-sparse
-router's entire function does, so synthetic input measures a routed
-method precisely where its premise fails. Any approximation-vs-dense
-figure taken on `randn` is a bound so loose it is misleading in the
-pessimistic direction -- see the referent rule under Conventions.
-
-**The rule is about accuracy specifically, and the three-way split
-matters -- do not read it as "synthetic benches are bad".**
-
-| question | synthetic input | why |
-|---|---|---|
-| **speed, VRAM** | fine | input distribution does not change the work done |
-| **fidelity** -- does this kernel compute what its own reference computes; is the output bit-identical; does the load stay in bounds | fine, and often **required** | a property of the arithmetic, not of the data. Constructed inputs beat real ones here: `tests/test_short_seq_tail.py` dirties smem with `+inf` before every sweep, which real activations never produce, and without it the file is green against a kernel already proven broken |
-| **accuracy** -- distance from exact attention, or anything standing in for perceptual quality | **not a measurement** | the whole error depends on structure `randn` does not have |
-
-Cross-implementation agreement rows (`fp8++vs.triton`) are fidelity, not
-accuracy. The tables below are kept as the record of what synthetic
-inputs said and for their speed and VRAM columns. **Do not quote their
-rtol columns.**
-
-**Do not run accum-config A/Bs expecting an accuracy result. The PV
-accumulator is not an accuracy lever; the width of the PV operands is.**
-Measured 2026-08-13 at a **MiniMax H3** self-attn shape
-(1, 56, 41822, 128) bf16 against `EFFICIENT_ATTENTION`, on **synthetic
-`torch.randn` inputs** -- see the real-activation correction below
-before quoting any figure in this table:
-
-| mode | mean_rtol | ms | vs torch |
-|---|---|---|---|
-| `fp8_cuda++` (`fp32+fp16`, default) | 0.0984 | 111.8 | 4.21x |
-| `fp8_cuda` (`fp32+fp32`) | 0.0980 | 129.3 | 3.64x |
-| `fp8_cuda` (`fp32`) | 0.0983 | 127.6 | 3.69x |
-| `fp16_cuda` (`fp16+fp32`) | **0.0367** | 177.7 | 2.65x |
-| `fp16_cuda` (`fp32`) | 0.0375 | 195.8 | 2.40x |
-| `fp16_triton` | 0.0426 | 164.9 | 2.85x |
-
-All three fp8 variants land within 0.0004 of each other **despite
-`fp32+fp16` also co-varying the V-quant `scale_max`** (`core.py:1219-1221`
--> 2.25 vs 448.0). So that pair is not merely a confounded isolation --
-both variables are close to inert, and it could not have produced an
-accuracy finding in either direction. The same inertness was measured
-on **LTX 2.3** shapes in 2026-04-23's "sm89 fp8 quantization scale" entry
-(448 vs 2.25, 0.097 either way) -- a different workload, so it
-corroborates the pattern rather than confirming it for H3. The H3
-number above is the H3 evidence.
-
-**What the two arms differ in is both PV operands, not V alone.** An
-earlier version of this section said the gap was "entirely fp8-vs-fp16
-V storage". It is not, and nothing here can isolate V, because P moves
-with it:
-
-| | P (post-exp) | V | QK |
-|---|---|---|---|
-| `fp8_cuda*` | fp32 -> e4m3, unscaled (`csrc/qattn/qk_int_sv_f8_cuda_sm89.cuh:323`) | e4m3, per-channel scale (`core.py:1223`) | int8 |
-| `fp16_cuda*` | fp32 -> fp16 (`csrc/qattn/qk_int_sv_f16_cuda_sm80.cu:317`) | plain `v.to(float16)` cast, no scale (`core.py:988`) | int8 |
-
-QK is int8 on both arms, so that much is held constant; everything else
-in the PV matmul moves together, and there is no fp8-P/fp16-V kernel to
-separate them with. Read the gap as **8-bit PV versus 16-bit PV**. This
-is load-bearing when ranking against a third-party kernel that quantizes
-P and V on different schemes -- "we measured 8-bit V costing Nx" is a
-claim this repo cannot support.
-
-On the synthetic numbers above, our default buys speed at ~98% of the
-0.10 rtol budget; the fp16-PV path spends 1.59x the time and +287 MiB to
-sit at ~37% of it.
-
-**The ratio is measured, not a floor, and it is flat across S.** An
-earlier version of this section guessed that the fp16 arm might be
-reference-limited by the bf16 comparand. **Disproved by re-running
-against an fp32 reference:** 0.0363 vs 0.0367 for fp16, 0.0984 either
-way for fp8++. The reference dtype does not matter here.
-
-Swept across a 17x range of sequence length (fp32 reference, synthetic):
-
-| S | `fp8_cuda++` | `fp16_cuda` (`fp16+fp32`) | ratio |
-|---|---|---|---|
-| 4,608 | 2.0 ms / 0.0969 | 2.8 ms / 0.0363 | 2.67x |
-| 24,576 | 39.4 ms / 0.0979 | 62.2 ms / 0.0363 | 2.70x |
-| 41,822 | 112.2 ms / 0.0984 | 178.0 ms / 0.0363 | 2.71x |
-| 78,336 | 394.7 ms / 0.0981 | 623.9 ms / 0.0362 | 2.71x |
-
-What those four S values are is only partly recoverable, since the script
-was not committed. 41,822 is a real packed fl2va length (1344x768, 124
-frames). 24,576 and 78,336 coincide exactly with 1024x768 video-row
-counts at on-grid latent_t of 32 and 102 -- i.e. 107-frame and 345-frame
-clips -- but they are equally exactly 24x1024 and 76.5x1024, so intent is
-not recoverable from the number. 4,608 maps to no on-grid H3 geometry and
-reads as a low-end anchor. Either way the top of the sweep is at or near
-the **legal** maximum clip length, so the range is not short of
-production; describe it as a 17x span of S at H3's head config.
-
-**No crossover exists**, so there is no "use fp16 above S=X" rule: the
-synthetic accuracy ratio is flat at ~2.7x and the *synthetic per-call*
-speed cost converges to ~1.58x (1.40x at the small end). **That 1.58x is
-a kernel number, not a delivered one** -- the only e2e observation runs
-the other way (a consumer render measured fp16 at 2.5 min against
-fp8++'s 2.7, confounded by first-arm model loading), so the e2e effect
-is unmeasured and must not be quoted as 1.58x slower renders. H3's S
-varies widely -- it is the packed
-`[text | refs | audio | video]` length, so canvas, aspect, clip length
-and reference count all move it (a real 345-frame 1024x768 reference
-render measures 143,386) -- and **one mode decision covers the whole
-range**. `fp16_triton` tracks at ~0.042 and OOMs at 78,336.
-
-**Every figure above is synthetic, and on real H3 activations the gap is
-1.3x, not 2.7x.** This was measured before any of the above and recorded
-in CHANGELOG v0.7.0 (2026-08-04): on q/k/v captured from an actual H3
-forward -- post-RMSNorm, post-RoPE, exactly what sage receives -- fp8++
-lands at mean_rtol **0.026** against an fp32 reference, roughly 4x below
-what the synthetic bench reports, and the fp8++-to-fp16 gap narrows to
-**1.3x** (so fp16 is ~0.020 there; only the ratio was recorded).
-**Quote the real-activation figures for H3 mode decisions, not the
-synthetic ones.** Real attention has structure that quantization handles
-far better than iid gaussian noise does; on synthetic input softmax is
-near-uniform, the output is a near-cancelling average of S random
-vectors, and a symmetric-denominator element-wise rtol is then dominated
-by cancellation.
-
-An earlier version of this section called that 0.026 an **unresolved**
-3.7x discrepancy and attributed it to
-`tests/spikes/spike_h3_kernel_divergence.py`. Both halves were wrong.
-That spike is the *synthetic* one and CHANGELOG v0.7.0 records its
-output as 0.0960 (S=2k) to 0.0979 (S=38k), consistent with everything
-above; 0.026 comes from its real-capture sibling
-`tests/spikes/spike_h3_real_activations.py`. The two landed in the same
-commit (`13b19e0`, "kernel divergence at H3 config, synthetic and
-real"). Nothing was ever unexplained.
-
-Further caveats on the synthetic figures: `torch.randn` inputs have zero
-channel mean, so `smooth_k` is inert; and rtol-against-SDPA is not
-perceptual quality. On `smooth_k` specifically, it has been measured at
-H3 config **on real activations** and is a wash (0.0264 -> 0.0266, fp32
-reference) even though K there carries a substantial channel offset
-(|mean|/std 0.68 mean, 6.09 max), which is the precondition for it to
-help. Do not re-litigate it, and note that a synthetic sweep *cannot*
-reproduce that result in either direction.
-
-**Provenance gap.** The 2026-08-13 mode table and S sweep have **no
-committed script and no raw log** -- they exist in this file plus commit
-messages `12a5872` and `1f619b4`, and `internal/log/` has no entry for
-that date. Reproducible in principle, not reproducible from artifacts.
-The two committed and runnable H3 accuracy harnesses are the divergence
-spike pair named above; prefer them, and prefer the real-activation one.
-`fp16_cuda` also silently drops `attn_mask` -- irrelevant to H3, whose
-sole call site passes `mask=None`, but not to masked workloads.
-
-Reuse `accuracy_metrics` from `tests/test_sageattn_ltx_shapes.py:160`
-for rtol/atol comparisons (symmetric denominator; matches every
-other accuracy bench in the repo, including `tests/test_partitioned.py`).
-Scripts under `tests/spikes/` need a one-line
-`sys.path.insert(0, str(Path(__file__).resolve().parent.parent))`
-before the import.
-
-For bit-identicality checks on bf16/fp16 outputs (e.g. stream-safety
-spikes), use `torch.equal(a.view(torch.uint16), b.view(torch.uint16))`
--- bare `torch.equal(a, b)` returns False whenever either tensor has
-NaN even at identical bit patterns, and random mockup weights at LTX
-shapes frequently produce NaN positions. The uint16-view sidesteps
-NaN-equality semantics. Worked example:
-`tests/spikes/spike_concurrent_dispatch_submodule.py::correctness_sanity`.
-
-Spike scripts under `tests/spikes/` wrap measurement loops in
-`torch.inference_mode()` (stricter than `no_grad` -- drops
-version-counter tracking; matches the sampler/consumer path under
-which these kernels actually run). Add NVTX ranges
-(`torch.cuda.nvtx.range("label")`) on every measurement region so
-`nsys profile` timeline view shows labeled kernels in addition to
-raw aggregation. Both conventions applied in
-`tests/spikes/spike_concurrent_dispatch{,_submodule}.py`.
-
-`tests/repros/` holds minimal standalone repros for kernel defects.
-
-GPU OOM mid-test usually means contention, not a bug. Check
-`nvidia-smi --query-gpu=memory.used,memory.free --format=csv,noheader`
-before debugging -- a sibling process likely holds the VRAM Triton
-autotune needs.
-
-**Before trusting a green result, ask what state would turn it red --
-then check that you actually created that state.** A check that passes
-because the condition it guards was never reproduced reads as coverage
-while asserting nothing. The recurring defect class in this repo is not
-wrong kernels; it is instruments that structurally could not have
-detected what they were trusted to detect. The mechanism is the same
-every time: the thing under test is not a pure function of its declared
-inputs, but gets measured as though it were. Four instances, each caught
-only after the fact:
-
-- **Prior launch's shared memory.** The v0.7.2 `kNoFill` defect does not
-  fire in a fresh process -- the unfixed kernel passes its own regression
-  sweep at mean_rtol 0.0345. It needs an earlier launch to have left
-  non-finite values in the smem bank, so
-  `tests/test_short_seq_tail.py` dirties with `+inf` before every sweep.
-  Written without that step the file is green against a kernel already
-  proven broken.
-- **Prior arm's allocator state.** The peak-HBM rule below.
-- **Neighboring modules' L2 footprint.** v0.6 sage_ffn benched 1.26-1.36x
-  in isolation and came back +1.79% e2e slower. The synthetic harness
-  could not see cache contention by construction, not by oversight.
-- **Position in time within a render.** The Sol-Attn quality gate compared
-  four still frames per arm and signed off; the failure it missed is a
-  small object losing its identity mid-clip, which no still can show. The
-  instrument was fine, the time sampling was wrong.
-
-Two corollaries worth applying by default. **Measure the config that
-ships:** `tests/test_sageattn_consume.py` records its peak with
-`smooth_k=False` while production defaults to True (`core.py:948`), so
-those numbers describe a configuration no consumer runs. And **prefer a
-paired comparand to a bare sweep:** an exact-multiple shape measured
-beside a ragged one attributes a delta to the tail, whereas a sweep in
-which every shape is ragged smears the same effect across all rows with
-nothing to attribute it against.
-
-**Peak-HBM cumulative measurement benches: do NOT precede the
-cumulative arm with a per-call-reset arm that does
-`gc.collect`/`empty_cache` between calls.** The reset arm trains the
-pytorch caching allocator into a state that biases the cumulative
-number downward. Caught 2026-05-13 by /simplify in
-`tests/bench/partitioned_mask_phase0/`; the pre-fix bench
-underreported the K-quant+V-cast redundancy delta by ~535 MiB and
-nearly shipped wrong numbers to a downstream consumer. Symptom:
-cumulative-with-mask and cumulative-no-mask measurements that look
-identical at a shape where they shouldn't.
-
-## Conventions
-
-- **Label the model on every measurement, claim, and doc.** LTX 2.3 and
-  MiniMax H3 are architecturally different, not two sizes of the same
-  thing, so a number from one is not evidence about the other:
-
-  | | LTX 2.3 | MiniMax H3 |
-  |---|---|---|
-  | in this repo since | ~2026-04 | **2026-08-04** (`3f3a121`) |
-  | attention sites | self-attn + **masked cross-attn** (headline shape) | **one** call site, no cross-attn |
-  | mask | load-bearing (drove the v0.5.5 kernel) | `mask=None` hardcoded; unreachable |
-  | sequence | separate q/kv streams | one packed `[text\|refs\|audio\|video]` |
-  | **bottleneck** | mixed -- FFN is a real share (`docs/ltx_workload_profile.md`), attention is one part | **attention is almost all of it** |
-
-  **The bottlenecks differ, so the work that pays differs.** Everything in
-  the FFN line -- `sage_ffn`, the GeGLU extension, the persistent-CTA
-  hybrid for it, the CUTLASS backend -- is **LTX-motivated and buys H3
-  little**, because H3's time is in attention. Conversely, attention-kernel
-  quality and speed is nearly the whole lever on H3 and only a fraction of
-  one on LTX. Rank any perf bet against the model it targets, not against
-  the repo in general; the Amdahl ceiling is different per model and a
-  wedge that is real on one can be noise on the other.
-
-  Consequences that have already bitten: the v0.5.5 native-mask kernel is
-  LTX-motivated and buys H3 nothing; `fp16_cuda`'s silent mask-drop
-  disqualifies it for LTX but not for H3. Anything dated before 2026-08-04
-  is LTX/Z-Image by construction -- cite it as corroborating a pattern,
-  never as confirming an H3 result.
-
-  **Each model has its own gated bench, and they gate different
-  quantities.** `tests/test_sageattn_ltx_shapes.py` +
-  `tests/regression_baselines.json` for LTX;
-  `tests/test_sageattn_h3_shapes.py` + `tests/regression_baselines_h3.json`
-  for H3 (promoted from a spike in v0.7.10). Both run gated in
-  `tests/run_all.sh`. The H3 file gates **speed, peak VRAM and cross-kernel
-  fidelity only** -- its baselines carry no rtol-vs-SDPA entries at all, so
-  the shared gate skips that check by construction rather than by a loose
-  threshold. That is the synthetic-input rule under Testing applied to a
-  gate: an rtol against SDPA on `torch.randn` is not a measurement at H3, so
-  gating on it would gate an artifact. H3 accuracy stays with
-  `tests/spikes/spike_h3_real_activations.py` and its captured q/k/v. H3
-  sequence lengths are derived in-file from the consumer node's own geometry
-  rules, not hand-copied, so a node-side geometry change shows up as a shape
-  change rather than as silent drift.
-
-  **On H3, most attention no longer reaches sage.** Since 2026-08-14 the
-  shipped consumer graphs chain a third-party block-sparse-attention CUDA
-  override (Sol-Attn, arXiv 2607.24027) above sage and give it H3's single
-  full-packed-length DiT attention call; sage is the fallback link and
-  receives only what the override declines -- depth-gated dense blocks,
-  steps outside the sigma window, sub-`min_tokens` calls, masked calls
-  (none, on H3) and kernel errors. Consumer-side e2e at 362 frames
-  (an out-of-ceiling length -- H3 rejects past 15.0 s after the 17n+5
-  snap, so 345 is the largest legal count; the ratio is still a ratio,
-  but it was taken at a shape nobody can render),
-  2026-08-14: 493.4 s against 794.7 s sage-alone (1.61x); that baseline ran
-  `fp8_cuda++` while the graphs of the day shipped `fp16_cuda`, so it
-  understated.
-
-  **That last clause has since expired -- re-checked 2026-09-08.** Every
-  API graph in the consumer repo now sets the sage node's mode to `auto`
-  (92 of 92), and `auto` on sm89 resolves to `fp8_cuda++`. So the
-  baseline and the shipped graphs run the *same* kernel today and the
-  "understates" correction no longer applies to a current render. Keep
-  the original reading only for the dated 2026-08-14 measurement it
-  describes. Consequence worth carrying: any advice that starts "you are
-  probably on fp16, switch to..." is advice about a configuration nobody
-  runs -- and the real-activation accuracy figures under Testing are the
-  ones that bear on the mode question, not the synthetic table.
-
-  **Sage is not idle in the override-on arm, and an earlier version of this
-  block said it was.** The "zero DiT calls" figure was read off the
-  `min_tokens` gate alone and ignored the sigma window. The override's
-  compose gate applies both, and a call failing *either* falls through to
-  the previously installed patch -- ours -- so every step outside the sigma
-  window runs the whole DiT on sage.
-
-  That mechanism is read from the override's `_compose_module_patch` and is
-  the part to rely on. The *share* is not: "5 of 16 at `0.2 / 0.9`" is the
-  consumer's computation, taken on trust here and **not independently
-  verified** -- it needs the sigma schedule under that scheduler and shift,
-  which is not derivable from our source. It moves with step count,
-  scheduler, shift and window. **Read it out of `get_dispatch_counts()`
-  rather than quoting a number** -- the count is the only thing separating
-  "sage handled a share" from "sage was bypassed", and both look identical
-  in a log.
-
-  So an H3 attention-kernel win multiplies against the dense share rather
-  than against the render, and the quant-offset ceilings (CHANGELOG v0.7.0
-  int32 fix; the `csrc/fused` uint32 ceiling under Known kernel bugs) bind
-  on that path only. The sparse kernels are a separate implementation --
-  `int64_t` strides and `size_t` offsets, read 2026-08-14 -- so they do
-  not share that defect.
-
-  **H3's conditioning region is multi-modal; do not reason about it as
-  "the audio sink".** The packed sequence is
-  `[text | refs | audio | video]` and `refs` is image *or video*
-  references, which in a reference-heavy graph are the largest part of
-  the conditioning region by a wide margin -- far larger than audio. The
-  override's `sink_conditioning` knob is documented in terms of keeping
-  generated audio intact, and that is one modality of a packed
-  audio-video output, not the whole of what conditioning carries. When
-  the override narrows which conditioning rows keep dense queries, the
-  rows it makes sparse are mostly reference rows, and a *video*
-  reference is temporally structured in a way an image reference is not.
-  Any claim about that knob taken on a t2v graph (no refs, so the region
-  is text+audio and text is under one 64-row block) generalises to
-  nothing.
-
-  **Never compare an approximate kernel's accuracy number to ours without
-  checking what its reference computes.** A block-sparse kernel's
-  correctness bench typically grades it against an eager implementation of
-  *its own algorithm at the same settings*, so the approximation is on both
-  sides and cancels: that number is implementation fidelity and contains no
-  approximation error at all. Ours is distance from exact attention. The
-  two are not the same quantity and no metric conversion reconciles them --
-  check the referent before the metric. Sol's harness makes both available
-  (fidelity ~0.9999, and separately its distance from its own dense limit);
-  only the second is comparable to a sage rtol, and **both of its published
-  figures are taken at `T=512, H=4` on `torch.randn`**, which is a
-  degenerate regime for block routing (8 blocks of 64) on structureless
-  input. Expect any approximation-vs-dense figure taken there to be
-  pessimistic by a wide margin, for the same reason our own synthetic
-  numbers are -- see the real-activation correction under Testing.
 - Python: **always uv**. Never `pip`, never bare `python3`.
 - JSON: **orjson**, never stdlib `json`.
 - **No emojis** in any file or output.
 - Comments: only non-obvious WHY.
-- **Never push without being asked.** Origin is the maintainer's
-  personal fork -- a GitHub fork of `thu-ml/SageAttention`.
-  `gh pr create` defaults `--base` to the **upstream parent**, so a
-  within-fork PR must pin `--repo <origin>` (and `--base`/`--head`)
-  or it opens a public PR against thu-ml.
-- **Retract wrong-framing in committed docs via `git revert`, not
-  in-place edit.** The revert preserves the wrong commit + its
-  message in `git log` and supersedes it with a revert commit on
-  top; the audit trail of "we believed X, then disproved X" stays
-  reconstructible. An in-place edit leaves the wrong framing in the
-  diff history as an unflagged precursor that future `git log -p
-  <file>` would surface without context. Worked example: the
-  2026-05-16 "47% comfy-aimdo offload" workload-profile claim
-  (commit `a05fdf4`) retracted via `git revert` at `95af2cf` after
-  a `nodynvram` A/B disproved the framing.
-- **Consumer-agnostic framing in committed material.** Refer to
-  downstream callers as "downstream consumer" / "consumer" --
-  generic. Model class is fine (LTX 2.3, Flux, Z-Image-Turbo); a
-  specific custom node by name is not. Two narrow carve-outs where
-  the name is itself load-bearing: the downstream-known-symbols
-  audit (specific importer) and measurement provenance (workflow
-  filename in perf claims).
-- **Task/caller refs in committed code don't age.** Memo timestamps
-  ("07:45Z"), cross-clone references ("per X's note"), and
-  session-specific framings ("today's spike showed") decay -- the
-  memo trail isn't in the repo, and a reader six months later can't
-  reconstruct context. Replace with the substantive reason: cite the
-  production precedent, the cross-version stability concern, or the
-  file:line of the canonical source. Easy to introduce; easy to
-  scrub in /simplify; the second cycle is wasted effort.
-- **Project-internal phase numbers don't ship.** Belong in the plan
-  file, not in code / CLI / CHANGELOG.
-- **Path discipline.** Every committed path is repo-relative. The
-  `path-privacy` plugin's pre-commit and commit-msg hooks hard-block
-  leaks; don't bypass. Belt-and-suspenders manual scan:
-  `git add <files> && git diff --cached | grep -nE '/home/|~/dev|~/ComfyUI|fbliss|/Users/'`  <!-- path-privacy: ignore -->
-- **Session logs append, never overwrite.** `internal/log/log_<date>.md`
-  may already exist on the same day -- append a new `## Update N --
-  <topic> (<time-of-day>)` section.
+- **Never push without being asked.** `gh pr create` defaults `--base` to
+  the upstream parent -- pin `--repo`/`--base`/`--head` or it opens a
+  public PR against thu-ml.
+- **Label the model on every measurement, claim and doc.**
+- **Prose never carries a measurement.** Point at the script, the
+  constant, or the dated record that holds it.
+- **Before trusting a green result, ask what state would turn it red,
+  then check you created that state.** This repo's recurring defect is
+  instruments that could not have detected what they were trusted to
+  detect. Catalogue: `docs/testing_practices.md`.
+- **A mutation that perturbs its own oracle proves nothing.** If breaking
+  the thing under test also moves what it is compared against, a green
+  result is uninformative.
+- **Perf-mechanism claims need both arms measured.** A number can come
+  from one measurement; a mechanism claim cannot.
+- **Gate ship-decisions on in-pipeline A/B** when synthetic-bench cannot
+  measure the dominant cost (L2 contention, dispatch overhead,
+  fragmentation, sustained-clock state). Before the ship commit, not
+  after.
+- **Never compare an approximate kernel's accuracy to ours without
+  checking what its reference computes.** Check the referent before the
+  metric.
+- **Retract wrong framing via `git revert`, not in-place edit**, so the
+  audit trail stays reconstructible.
+- **Consumer-agnostic framing in committed material.** Model class is
+  fine; a specific custom node by name is not.
+- **No task/caller refs or project-internal phase numbers in committed
+  code.** They decay; cite the substantive reason instead.
+- **Path discipline.** Every committed path is repo-relative; the
+  `path-privacy` hooks hard-block leaks and are not to be bypassed.
+- **Session logs append, never overwrite** (`internal/log/log_<date>.md`).
 - **Local-machine config in `internal/local_config.json`** (gitignored).
-  Resolution order: CLI arg > env var > `local_config.json` > hard
-  error pointing at the runbook. Don't hardcode local-machine values
-  in committed code.
-- **`coderef/` is gitignored** alongside `internal/`. Holds
-  symlinks/clones of consumer source trees for verification. Use
-  proactively as a verification surface (perf-mechanism claims,
-  aspirational API doc claims) -- discipline in
-  `docs/perf_research_framework.md`.
-- **Perf-mechanism claims need both arms measured.** A *number* can
-  come from one measurement; a *mechanism* claim needs both A/B
-  arms directly instrumented. Full rule + the v0.5.1 retirement
-  story in `docs/perf_research_framework.md`.
-- **Kernel signature changes are a four-place coupling on the sm89
-  path.** Adding a runtime param to a sm89 kernel (e.g. v0.5.5
-  `attn_mask`) needs (a) the `.cuh` template + kernel-launch sites
-  in all 7 sm89 `.cu` files, (b) the C++ entry + `attn_cuda_sm89.h`
-  decl, (c) pybind def with `py::arg(...)=c10::nullopt` defaults,
-  (d) `sageattention/sm89_compile.py::@torch.library.custom_op`
-  schema + matching `register_fake` stub. Forget (d) and the call
-  fails at runtime with "expected at most N argument(s) but
-  received N+1" -- pybind alone isn't enough. Worked example:
-  CHANGELOG v0.5.5 + the kernel-correctness-reviewer agent.
-- **Gate ship-decisions on in-pipeline A/B when synthetic-bench
-  can't measure the dominant cost.** Two layers to this rule:
-  (a) Don't *claim* a delivered speedup from a synthetic number;
-  default framing is "synthetic-bench above, e2e pending in-pipeline
-  measurement" until a downstream A/B confirms the wedge transfers.
-  (b) For kernel-day work with structural risk that synthetic-bench
-  *specifically* can't measure (L2 contention with neighboring
-  modules in the production hot loop, cumulative dispatch overhead
-  at high call counts, memory-allocator behavior under fragmentation,
-  thermal/clock state during sustained renders), gate the v0.X ship
-  commit on an in-pipeline measurement BEFORE the commit lands, not
-  after. The v0.6 walk-back was the cost of running this rule
-  ship-first-validate-later.
-  Two precedents: v0.5.5 chunk-bypass A/B (synthetic mask-kernel win
-  softened once `LTXVChunkFeedForward` was shown to be doing the
-  load-bearing memory work) and v0.6 sage_ffn (synthetic 1.26-1.36x
-  came back +1.79% e2e slower on a two-sampler LTX FML2V workflow
-  due to L2 contention + cumulative launch overhead). Especially
-  load-bearing for per-call-heavy primitives (FFN/MLP fire ~1000
-  times per LTX render -- any per-call overhead compounds and any
-  cache-locality assumption made under isolation can break).
-- **Triton kernel-day discipline.** Four recurring traps:
-  (a) `@triton.jit` can't read module-level Python globals -- inline
-      literals in the kernel body (e.g. `448.0` for FP8_E4M3_MAX).
-  (b) For DiT FFN/MLP kernels, audit BOTH Linear layers for `bias=True`
-      on the target checkpoint. LTX 2.3 distilled has bf16 biases on
-      both `ff.net.0.proj` and `ff.net.2`; shipping a bias-free kernel
-      silently corrupts output (not "fp8 quant noise" wrong, "missing
-      a constant offset everywhere" wrong). Caught pre-day-9 in v0.6.
-  (c) Broad `@triton.autotune` sweeps (>~30 configs) burn minutes of
-      first-render-per-shape on user hardware (126 configs = ~7 min
-      cold). Pattern: tune full sweep once, extract winners via
-      `kernel.cache.items()`, hardcode ~8 configs + neighbors. Worked
-      example: v0.6 sage_ffn (CHANGELOG v0.6.0).
-  (d) CUDA event timing across streams captures queue-wait + execution,
-      not just kernel duration. When `e_start.record()` is on the
-      default stream and `e_end.record(s_other)`, `elapsed_time` between
-      them measures `s_other`'s wait-for-SMs plus the kernel. A `t_ms`
-      variable name telegraphs "this is kernel time"; future readers
-      will misread. Use `*_end_offset_ms` or similar to signal the
-      asymmetry vs single-stream timing. Worked example:
-      `tests/spikes/spike_concurrent_dispatch.py` (renamed in /simplify
-      pass after the bare metric misread).
-  (e) Raw CUDA kernel launches default to stream 0 if the 4th arg is
-      omitted. `<<<grid, block, smem>>>` silently breaks any caller that
-      wraps sage in `with torch.cuda.stream(...)` -- Triton kernels in
-      the same Python call respect current stream, the CUDA launch
-      doesn't, and the race surfaces as small-but-stable rtol drift
-      (~0.02) or NaN under a partial fix that only patches the attn
-      kernel but leaves `csrc/fused/fused.cu`'s quant pre-kernels on
-      stream 0. Use `<<<grid, block, smem,
-      at::cuda::getCurrentCUDAStream()>>>` and
-      `#include <ATen/cuda/CUDAContext.h>` on every site (`csrc/qattn/`
-      sm89/sm80 + `csrc/fused/fused.cu`). Worked example: v0.6.1
-      (CHANGELOG).
+  CLI arg > env var > that file > hard error.
+- **`coderef/` is gitignored** and holds consumer source trees. Use it to
+  verify claims about upstream rather than trusting a note.
+- **Re-check a claim about a fast-moving dependency before citing it**,
+  and record what would make it stale. Six claims in this repo went false
+  without anything failing; see `docs/drift_audit_and_directions.md`.
 
-## The consumer surface
+## Two contracts that break silently
 
-Sage exposes three surfaces to downstream consumers:
+Loudly-breaking contracts do not need documenting. These two do.
 
-1. **`sageattn()` top-level dispatcher.** Picks a kernel based on
-   `(detected arch, CUDA version, mask presence)`. On sm89 + CUDA >=
-   12.8 unmasked: lands on `sageattn_qk_int8_pv_fp8_cuda` with
-   `pv_accum_dtype="fp32+fp16"`. With `attn_mask` passed: routes to
-   the same `sageattn_qk_int8_pv_fp8_cuda` (the v0.5.5 native CUDA
-   mask path); other archs still route to `sageattn_qk_int8_pv_fp16_triton`
-   since their CUDA kernels haven't gained mask support yet.
-   Implementation: `sageattention/core.py::sageattn` pulls `attn_mask`
-   out of `**kwargs` before the arch branch and bifurcates on
-   `(arch, cuda_version, mask_present)`. The routing invariant is
-   enforced by a test in `tests/test_dispatched_kernel_telemetry.py`.
-   **Most consumers should just call this and let dispatch decide.**
-2. **Specific kernel exports** -- `sageattn_qk_int8_pv_fp16_cuda`,
-   `sageattn_qk_int8_pv_fp8_cuda`, `sageattn_qk_int8_pv_fp16_triton`,
-   etc. Bypass the dispatcher; caller picks. **Masked attention works
-   on sm89 fp8++ (`pv_accum_dtype="fp32+fp16"`) as of v0.5.5** and on
-   the Triton kernel; other CUDA variants (sm80 fp16, sm89 non-fp8++)
-   still silently drop the mask and warn. If a consumer hand-picks a
-   non-mask-correct CUDA kernel + mask, the v0.3.1 soft-warn fires;
-   the dispatcher is the safe default.
-3. **`sage_ffn(x, w1, s1, w2, s2, b1=None, b2=None)`** (v0.6) -- a
-   separate FFN primitive, not an attention kernel. Two-kernel
-   Triton fp8 MLP (`Linear(fp8) -> GELU(tanh) -> Linear(fp8)`)
-   targeting LTX 2.3-class FFN blocks (hidden=4096, inner=16384,
-   per-tensor fp8 E4M3FN weights, optional bf16 biases on both
-   Linear layers). Synthetic bench shows 1.26-1.36x vs torch's
-   fp8-dequant reference; **in-pipeline A/B on a two-sampler LTX
-   workflow came back +1.79% e2e slower (+20% per-call at stage-2)**,
-   so this ships as a completeness primitive, not a perf win. Root
-   cause is L2 cache contention with neighboring attention modules
-   + cumulative kernel-launch overhead at LTX's ~1000-FFN-calls/render
-   count. Not wired into `sageattn()`; consumer imports it directly
-   from the top-level package. The qualitative wedge holds (no other
-   library ships fp8-native fused MLP for ComfyUI consumer-app on
-   sm89); the quantitative wedge does not on the tested workload.
-   v0.6.1 candidates to close the gap: persistent-CTA hybrid and
-   CUTLASS-based CUDA backend (see CHANGELOG Backlog).
-4. **`sageattn_consume(qkv, ...)`** (v0.7) -- `sageattn()` that takes
-   ownership of q/k/v so the float tensors are released once quantized
-   instead of at end-of-call. `sageattn()` cannot do this: the caller's
-   frame owns the refs. Takes a `[q, k, v]` list, which it empties, or
-   three single-owner containers exposing `peek()`/`take()` -- the
-   protocol ComfyUI added in `bf4c9a08` and wraps H3's q/k/v in on every
-   call (v0.7.5). Taken here rather than by the caller deliberately:
-   unwrapping in the caller's frame re-binds all three for the duration
-   of the call, which is the retention this entry point exists to avoid.
-   Same signature otherwise; output bit-identical. **What it saves is
-   configuration-dependent, and in the arrangement DiT blocks actually
-   use it currently saves nothing** -- measured at fl2va, peak per call:
-   separate allocations -858 MiB at `smooth_k=False` but only -287 at
-   the shipped `smooth_k=True` (`per_thread_int8` allocates the int8
-   outputs before evaluating `k = k - km`, so a full bf16 K copy lands
-   on top); fused QKV views **0 MiB either way**, because releasing q
-   and k frees nothing while v holds the same allocation, and by the
-   time v goes `per_channel_fp8`'s bf16 transpose buffer has set a
-   higher peak. The earlier "~435 MiB in the fused case" figure was
-   wrong; corrected in CHANGELOG v0.7.3. Making the fused case pay
-   *from in here* needs the transpose buffer dropped **and** the
-   mean-subtraction done in place -- either alone leaves the other
-   setting the floor. Only the sm89 fp8 path releases early; other
-   kernels fall back to the ordinary path, correct but with no saving.
-5. **`sageattn_consume_prefers_cloned_v(device)`** (v0.7.4) -- the
-   caller-side way out of that fused case, and the answer to "should I
-   clone?". A caller that clones v before handing the list over gives
-   it its own storage, so releasing q and k frees the fused buffer:
-   -286 MiB per call at fl2va, for one third of the buffer. Both halves
-   are load-bearing and asymmetric -- cloning without consuming is a
-   flat +572 MiB, and consuming at `smooth_k=True` hands the clone
-   straight back (+286 the wrong way).
+1. **`attn_mask` must stay a named parameter of `sageattn()`.** ComfyUI
+   gates masked calls on `"attn_mask" in inspect.signature(...)`; when
+   that reads False it routes every masked call to torch SDPA, which
+   stranded the v0.5.5 kernel until v0.7.0. Pinned by
+   `tests/test_dispatched_kernel_telemetry.py`.
+2. **`build_info()`'s key set is embedded in a consumer's dated
+   records.** Adding a key is compatible; removing, renaming or retyping
+   one is not, and `revision` is pinned at 12 characters. Pinned by
+   `tests/test_build_info_contract.py`.
 
-   **ComfyUI did this as of 2026-08-11 and does NOT any more -- re-read
-   2026-09-08.** `comfy/ldm/minimax/model.py` now builds q/k/v as
-   `self.qkv_proj(x).split(...)`, i.e. three views of one fused buffer,
-   and wraps each in `AttentionTensorContainer`, which stores the tensor
-   and does not copy it. There is no `.clone()` on the v path. So the
-   built-in path is exactly the fused-views case measured at **0 MiB
-   saved either way**: releasing q and k frees nothing while v holds the
-   same allocation.
+Everything else: `docs/consumer_surface.md`, and
+`docs/downstream_symbols.md` for the underscore surface and the
+pre-removal checklist.
 
-   **So whether the saving happens depends on which path handles
-   attention, and the two differ.** A consumer attention-patch node that
-   owns the call site can clone `v` itself, and the one tracked here
-   does: it gates on `sageattn_consume_prefers_cloned_v` for the device
-   it is actually running on, keeps `smooth_k=False` because that is
-   what makes the clone pay, and pins the wiring with its own test. On
-   that path the saving is realized. On ComfyUI's own built-in sage path
-   it is not, and `sageattn_consume` there is correct, bit-identical and
-   buying nothing.
+## Where things are
 
-   Do not "fix" this by cloning unconditionally. Both halves are
-   asymmetric -- the +572/-286 figures above are why a half-applied
-   version costs memory instead of saving it -- and the predicate exists
-   so the decision tracks the arch and the fork version rather than a
-   copied constant.
+**Code.** `sageattention/core.py` is `sageattn()` dispatch (sm89 +
+CUDA >= 12.8 lands on `sageattn_qk_int8_pv_fp8_cuda`,
+`pv_accum_dtype="fp32+fp16"`). `csrc/qattn/` holds the sm80 and sm89
+kernel sets, `sageattention/triton/` the JIT kernels,
+`sageattention/comfyui_compat.py` the fp8 storage-convention shim,
+`setup.py` the build (our patch adds sm89 to the SM80 gate).
 
-   Consumers gate on the predicate rather than on an arch check so that
-   a) they don't copy `core._EARLY_RELEASE_ARCHS` into their node where
-   it drifts silently, and b) they inherit the flip to False if the
-   transpose-buffer backlog item ever lands, which retires the clone
-   rather than stacking with it. Numbers + reasoning in CHANGELOG
-   v0.7.4.
+**Docs, by the question you are asking:**
 
-**`attn_mask` must stay a named parameter of `sageattn()`**, not a
-`**kwargs` entry. ComfyUI gates masked calls on `"attn_mask" in
-inspect.signature(sageattn).parameters`; when that reads False it
-routes every masked call to torch SDPA, which silently stranded the
-v0.5.5 CUDA mask kernel until v0.7.0. Enforced by a test in
-`tests/test_dispatched_kernel_telemetry.py`.
+| question | file |
+|---|---|
+| What did we measure on H3, under what conditions? | `docs/h3_kernel_measurements.md` |
+| What actually runs on H3, and what reaches sage? | `docs/h3_attention_stack.md` |
+| How do I write a measurement here without fooling myself? | `docs/testing_practices.md` |
+| Why is that rule a rule? | `docs/conventions.md` |
+| What do consumers import, and what breaks if I change it? | `docs/consumer_surface.md`, `docs/downstream_symbols.md` |
+| How do I read a perf result? | `docs/perf_research_framework.md` |
+| Can I change a bench shape or a baseline? | `docs/bench_discipline.md` |
+| Which claims went stale, and what should we do next? | `docs/drift_audit_and_directions.md` |
+| Is this approximate-attention setting acceptable? | `docs/sparse_attention_quality_gating.md` |
+| How do I work against a dependency that moves hourly? | `docs/moving_targets.md` |
+| What is ours vs upstream? | `docs/whats_ours_vs_upstream.md` |
+| A kernel defect is blocking a workflow | `docs/sage_bug_fix_workflow.md` |
+| H3's two flow schedules under one sampler | `docs/minimax_h3_av_sampling.md` |
+| Where does LTX wall-time go? (parked) | `docs/ltx_workload_profile.md` |
+| Why not torch.compile? | `docs/torch_compile_spike.md` |
+| Does fp16 accumulation change our output? (no) | `docs/fp16_matmul_accum.md`, `docs/fp16_accum_fp8_matmul.md` |
+| Scope, mission, what we might be wrong about | `VISION.md` |
+| Open triggers, closed decisions, known kernel bugs | `CHANGELOG.md` |
 
-Mask-routing fix landed v0.3.0 (2026-04-26); audit trail in
-`internal/audit_2026-04-26.md`. Native CUDA mask landed v0.5.5
-(2026-05-13) on sm89 fp8++; scoping doc + measurement trail in
-`docs/cuda_mask_kernel_scoping.md`. FFN
-fusion landed v0.6.0 (2026-05-15); scoping + day-by-day execution
-journal + cross-claude memo trail in
-`internal/design/ffn_fusion_scoping.md` (gitignored).
+**Gitignored.** `internal/log/log_<date>.md` session narrative,
+`internal/audit_<date>.md` durable findings, `internal/h3_sol_diary.md`
+the H3 + sparse-attention narrative index (names third-party nodes, so it
+cannot be committed), `internal/pyright_noise.md` known false positives,
+`.claude.local.md` local paths.
 
-There is also an undocumented L3 contract -- underscore-prefixed
-symbols and pybind methods that downstream consumers import by name.
-Before removing or renaming any of those, read
-`docs/downstream_symbols.md` and run the pre-removal checklist.
-
-## Performance research
-
-Two complementary inputs for any perf decision:
-
-1. **Kernel-isolation gate**: `tests/test_sageattn_ltx_shapes.py`,
-   shape `ltx23_video_self_attn_init_22932`, mode `fp8_cuda++`.
-   This is the single load-bearing row for "does this kernel work
-   at speed X at this shape" -- the isolation question. Synthetic
-   kernel-bench number; do not promote as delivered consumer-app
-   speedup.
-2. **E2e leverage input**: `docs/ltx_workload_profile.md` -- where
-   wall-time actually lives in the FML2V multi-guide workflow.
-   Canonical source for sub-module shares + the FFN-share triplet
-   (total / video-only / stage-2-only readings). Cite that doc
-   rather than restating percentages locally; the next render-data
-   refresh updates one place. The framework in
-   `docs/perf_research_framework.md` says: measure attention-share-
-   of-CUDA-time on each workload of interest, apply Amdahl with the
-   per-kernel ratio observed on that workload's actual call mix.
-
-E2e ratios are workload-dependent (attention share varies). Full
-framework -- reasoning chain, side-effect checks, experiment-
-selection patterns, ignore-triggers, "what we might be wrong about",
-pre-trigger briefing -- in `docs/perf_research_framework.md`. Load
-that before running a perf experiment.
-
-Snapshot `torch` + `triton` versions right before any commit that
-cites perf numbers -- env can drift mid-session via the venv's uv
-pip activity, and a CHANGELOG number is only honest under the
-stack that produced it. One-liner: `${VIRTUAL_ENV}/bin/python -c
-"import torch, triton; print(torch.__version__,
-torch.version.cuda, triton.__version__)"`.
-
-## Compile / torch.compile
-
-Not used. Consumer wraps sage in `torch.compiler.disable()`. The
-spike rejects on rtol drift, not perf. Two pybind kernels Dynamo
-graph-breaks at, the trigger to revisit, and the estimated work in
-`docs/torch_compile_spike.md`.
-
-## Deeper context (L3 references)
-
-- `docs/perf_research_framework.md` -- load-bearing metric, reasoning
-  chain, side-effect checks, five experiment-selection patterns,
-  ignore-triggers, uncertainty record, mechanism-claim + aspirational-
-  claim discipline, prior-recording, pre-trigger briefing, evidence
-  ladder for kernel-replacement audits (kernel-name presence >
-  per-call logs > attribution coverage > sub-module time delta;
-  every fallback path needs a log line).
-- `docs/whats_ours_vs_upstream.md` -- file-by-file inventory: upstream
-  unmodified, removed-in-v0.5.0, our additions + status of each.
-- `docs/downstream_symbols.md` -- de-facto public surface (underscore
-  symbols + pybind methods), known importers, pre-removal checklist.
-- `docs/sage_bug_fix_workflow.md` -- 5-step procedure when a kernel
-  defect blocks a workflow: minimal repro -> locate kernel in
-  csrc/qattn/ -> patch -> rebuild -> CHANGELOG entry.
-- `docs/bench_discipline.md` -- env snapshot rules, cross-session
-  ratio comparison, before-changing-bench-shapes workflow,
-  regression_baselines.json source-of-truth rule.
-- `docs/fp16_matmul_accum.md` -- whether KJ's
-  `enable_fp16_accumulation` affects sage output (no).
-- `docs/ltx_workload_profile.md` -- canonical FML2V render
-  breakdown + FFN-share triplet. Use this for ranking perf bets by
-  leverage.
-- `docs/fp16_accum_fp8_matmul.md` -- analysis of why fp16-accum
-  fp8 matmul throughput work (LinkedIn-article-style "473 TFLOPS
-  at LLM shape") doesn't help LTX FFN-class workloads. Throughput
-  claim is real and independently replicated; the per-MMA
-  accumulator overflow constraint kills the rtol budget on DiT
-  activation distributions specifically.
-- `docs/minimax_h3_av_sampling.md` -- H3's packed AV latent carries two
-  flow schedules under one sampler; what the upstream schedule fix
-  changes and what it does to our H3 baselines. Kernel-side numbers
-  survive it; any comparison of rendered output across the merge does
-  not. Read before re-running an H3 quality A/B.
-- `docs/sparse_attention_quality_gating.md` -- how to decide whether an
-  approximate-attention setting is acceptable on long video. Separates the
-  two late-clip phenomena that get merged (broad decay near the trained
-  frame-range top, whose lever is frame count, versus threshold-graded
-  content instability, which is the approximation's own artifact), why a
-  per-layer binary exemption is the wrong shape for a graded sensitivity
-  profile, and the gate procedure: intra-clip, never numeric, video not
-  stills, prove the knob fired. Read before running a quality A/B on any
-  attention approximation.
-- `docs/drift_audit_and_directions.md` -- dated audit (2026-09-08) of
-  claims in committed material that had gone false without anything
-  failing, the negatives checked alongside them, and where to dig next.
-  Read it before assuming a documented fact about an upstream file is
-  still true, and before attributing render quality to this fork -- it
-  carries the attribution order, and the reason no accuracy gate exists
-  for the packed audio-video model. Not a work queue: triggers live in
-  CHANGELOG's Backlog, closed items in its Decision log.
-- `docs/moving_targets.md` -- how to work when the dependencies change
-  by the hour: pin versions with the measurement not the session,
-  re-verify upstream gates in both directions, treat a name in a
-  capability list as a name, prefer call-time counters to install-time
-  logs, and record each finding's expiry condition. Read this before
-  measuring anything that depends on a fast-moving third-party node.
-  Rigour here means "a result plus the state that produced it plus what
-  makes it stale", not "a reproducible result".
-- `internal/h3_sol_diary.md` (gitignored) -- running diary for MiniMax H3
-  and the sparse-attention consumer node. Names specific third-party
-  nodes, so it cannot be committed material. It is the narrative index
-  for that work: standing state, what is still open, and what was
-  superseded plus what disproved it. Read it before re-running an H3
-  measurement -- two conclusions have already gone stale without anyone
-  noticing at the time, and the third-party nodes involved ship
-  behaviour-changing commits faster than our docs track them. Detail
-  lives in the files it points at, not in the diary. The consumer repo's
-  own `docs/SOLATTN.md` (reachable through `coderef/`) is the canonical
-  write-up of the H3 sparse-attention stack -- backend choice, install,
-  the e2e arms, and the quality gate -- and it is maintained there, not
-  here.
-- `internal/pyright_noise.md` (gitignored) -- pyright false-positives
-  to ignore in `sageattention/` and `tests/`. Two recurring categories
-  worth knowing up front: "unreachable code" on `@triton.jit` kernel
-  bodies, and "is not accessed" on package `__init__.py` re-exports.
-  Both are persistent; don't try to fix.
-
-## Related
-
-- `VISION.md` -- canonical scope doc. What this fork is, what it
-  isn't, the single load-bearing metric, what we might be wrong
-  about. Rare edits.
-- `docs/roadmap.md` -- forward-looking record of directions worth
-  pursuing, tiered by relevance to the current workload + trigger-
-  conditional. Not a committed schedule; the user remains the
-  scheduler. Edited when the option space shifts (a tier item gets
-  promoted to CHANGELOG Backlog, demoted to Decision-log, or a new
-  candidate is enumerated).
-- `README.md` -- attribution + minimal user-facing summary.
-- `CHANGELOG.md` -- versioned divergence + Known kernel bugs +
-  Backlog + Decision log + Recurring process items. Source of truth
-  for closed decisions.
-- `internal/log/log_<date>.md` and `internal/audit_<date>.md`
-  (gitignored) -- session narrative and durable findings. There is no
-  separate live plan doc: `internal/PLAN.md` was retired 2026-08-05
-  because it duplicated CHANGELOG's Backlog and Decision log while
-  drifting out of date against them, which made it a second and
-  quietly wrong answer to "what is the current state". CHANGELOG is
-  the single source of truth for both open triggers and closed
-  decisions; don't reintroduce a mirror of it.
-- Scoping-doc precedent for kernel-day work that needs a discipline
-  check (PTX bit-identity diff of the kNone specialization, register-
-  pressure read, four-place-coupling audit) BEFORE committing to the
-  full implementation. Cheap investigation that de-risks the kernel
-  work; produces an effort-estimate refinement that ages better than
-  the "days, not hours" rule of thumb in CHANGELOG / Backlog. Public
-  worked example shipped at `docs/cuda_mask_kernel_scoping.md`
-  (v0.5.5); current gitignored work-in-progress at
-  `internal/design/ffn_fusion_scoping.md` (v0.6).
-- `.claude.local.md` (gitignored) -- personal companion to this
-  file. Holds the specific local-machine details that would leak
-  in committed material: active venv path, consumer-install
-  location, `coderef/` symlink targets.
-- A downstream ComfyUI consumer (any custom node patching attention)
-  owns routing policy, tracing telemetry, and workflow integration.
-  Sage-fork stays primitive: kernels and the bench harness only.
+`CHANGELOG.md` is the single source of truth for open triggers (Backlog)
+and closed decisions (Decision log). There is no separate plan file --
+`internal/PLAN.md` was retired for drifting against it.
