@@ -297,12 +297,47 @@ def measure_mode(
     return Metrics(mean_r, max_r, mean_a, max_a, median_ms, peak_vram_mib), out
 
 
+def _sage_source_revision() -> str:
+    """`" @ <sha>"` for an editable checkout, `""` when it can't be resolved.
+
+    Never raises and never blocks: a bench header must not fail because git
+    is missing, the package is a wheel, or the checkout is unreadable.
+    """
+    import subprocess
+    try:
+        import sageattention
+        pkg_dir = Path(sageattention.__file__).resolve().parent
+    except Exception:
+        return ""
+    try:
+        sha = subprocess.run(
+            ["git", "-C", str(pkg_dir), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if sha.returncode != 0:
+            return ""   # a wheel install, or not a checkout
+        dirty = subprocess.run(
+            ["git", "-C", str(pkg_dir), "status", "--porcelain", "--untracked-files=no"],
+            capture_output=True, text=True, timeout=5,
+        )
+        suffix = "-dirty" if dirty.returncode == 0 and dirty.stdout.strip() else ""
+        return f" @ {sha.stdout.strip()}{suffix}"
+    except Exception:
+        return ""
+
+
 def print_header(label_width: int):
     print(f"device: {torch.cuda.get_device_name(0)}")
     print(f"torch:  {torch.__version__}")
     try:
         import sageattention
-        print(f"sage:   {getattr(sageattention, '__version__', '?')}")
+        # Version identifies the release; on an editable install several
+        # commits share one, and the commit is what actually identifies the
+        # kernels these numbers came from. Report both, and say when the tree
+        # is dirty -- a measurement taken on uncommitted changes is not
+        # reproducible from the sha alone.
+        ver = getattr(sageattention, "__version__", "?")
+        print(f"sage:   {ver}{_sage_source_revision()}")
     except ImportError:
         print("sage:   (not importable)")
     print(f"{'mode':<{label_width}}  {'mean_rtol':>10}  {'max_rtol':>10}  "

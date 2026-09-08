@@ -9,3 +9,22 @@ from .core import get_last_dispatched_kernel, get_dispatch_counts, KNOWN_KERNEL_
 from .triton.fused_rope import fused_rope_split
 from .triton.fused_mlp_fp8 import sage_ffn
 from .comfyui_compat import extract_fp8_weight_and_scale
+
+# Every bench log this fork has ever written recorded `sage: ?` in its header,
+# because the package exposed no __version__ while setup.py declared one. That
+# is a provenance hole in the measurement surface: the logs pin torch and
+# triton and stay silent on the sage build that produced the numbers. Resolved
+# from installed metadata rather than hardcoded, so it cannot drift from
+# setup.py. Note it identifies the *release*, not the commit -- on an editable
+# install several commits share a version, which is why the bench header also
+# reports the source tree's git sha.
+try:  # pragma: no cover - trivial, and the fallback is the interesting path
+    from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
+    try:
+        __version__ = _pkg_version("sageattention")
+    except PackageNotFoundError:  # running from a source tree, not installed
+        __version__ = "unknown"
+    del _pkg_version, PackageNotFoundError
+except ImportError:  # pragma: no cover
+    __version__ = "unknown"

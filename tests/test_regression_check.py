@@ -39,23 +39,38 @@ def _baselines_path() -> Path:
     return Path(__file__).parent / "regression_baselines.json"
 
 
+def _h3_baselines_path() -> Path:
+    return Path(__file__).parent / "regression_baselines_h3.json"
+
+
 def _load_baselines() -> dict:
     return orjson.loads(_baselines_path().read_bytes())
 
 
-def _measurements_from_baselines(bench, scale_ms: float = 1.0):
+def _measurements_from_baselines(bench, scale_ms: float = 1.0,
+                                 scale_vram: float = 1.0,
+                                 path: Path | None = None):
     """Build a fake measurements dict that mirrors what the bench would
     emit if every load-bearing baseline came back at exactly its
-    pinned value (or scale_ms multiplied)."""
-    cfg = _load_baselines()
+    pinned value (or scale_ms / scale_vram multiplied).
+
+    Entries may legitimately omit `median_ms` (the fp8++vs.triton
+    fidelity row never ran a kernel; the H3 torch_flash row is
+    load-bearing only to anchor the speedup ratio), so a missing key
+    means "no measurement of that kind", not zero.
+    """
+    cfg = orjson.loads((path or _baselines_path()).read_bytes())
     out = {}
     for entry in cfg.get("baselines", []):
+        ms = entry.get("median_ms")
+        vram = entry.get("peak_vram_mib")
         out[(entry["shape"], entry["mode"])] = bench.Metrics(
             mean_rtol=float(entry.get("mean_rtol") or 0.05),
             max_rtol=2.0,
             mean_atol=0.0001,
             max_atol=0.001,
-            median_ms=float(entry["median_ms"]) * scale_ms,
+            median_ms=None if ms is None else float(ms) * scale_ms,
+            peak_vram_mib=None if vram is None else float(vram) * scale_vram,
         )
     return out
 
@@ -157,6 +172,50 @@ def test_rtol_breach_fails():
     assert rtol_lines, "expected RTOL lines on budget breach"
 
 
+
+def test_vram_drift_fails_load_bearing():
+    """A peak-VRAM blowout on a load-bearing row must fail the gate.
+
+    Added because the VRAM branch shipped with no unit test: it had only
+    ever been seen firing in an ad-hoc mutation run, which proves it can
+    fire once, not that it stays wired.
+    """
+    bench = _import_bench()
+    measurements = _measurements_from_baselines(
+        bench, scale_vram=1.50, path=_h3_baselines_path())
+    exit_code, lines = bench.check_regressions(measurements, _h3_baselines_path())
+    assert exit_code == 1, f"50% more VRAM should fail, got exit {exit_code}: {lines}"
+    vram_lines = [l for l in lines if l.startswith("VRAM")]
+    assert vram_lines, f"no VRAM lines on a 50% VRAM blowout: {lines}"
+
+
+def test_vram_shrink_is_not_a_failure():
+    """VRAM regressions are one-directional, like perf: using less is fine."""
+    bench = _import_bench()
+    measurements = _measurements_from_baselines(
+        bench, scale_vram=0.5, path=_h3_baselines_path())
+    exit_code, lines = bench.check_regressions(measurements, _h3_baselines_path())
+    assert exit_code == 0, f"using less VRAM shouldn't fail: {lines}"
+
+
+def test_h3_baselines_match_themselves():
+    """The H3 file must self-match, same mirror-image property as LTX.
+
+    It exercises paths the LTX file does not: entries with no
+    `median_ms` at all, and a baseline set carrying no rtol-vs-SDPA
+    entries. Both are deliberate (see the H3 bench docstring), so this
+    pins that the gate treats "absent" as "not checked" rather than as
+    zero -- an absent key read as 0.0 would fail every row instead.
+    """
+    bench = _import_bench()
+    measurements = _measurements_from_baselines(bench, path=_h3_baselines_path())
+    exit_code, lines = bench.check_regressions(measurements, _h3_baselines_path())
+    regressions = [l for l in lines
+                   if not l.startswith(("SPEEDUP", "FASTER", "MISSING"))]
+    assert exit_code == 0, f"H3 baselines must self-match, got {exit_code}: {lines}"
+    assert not regressions, f"unexpected regression lines: {regressions}"
+
+
 def test_missing_baselines_file_skips_gracefully():
     """A run with no baselines file at all: exit 0, single explanatory
     line, no crash. Lets the gate be opt-in -- bench works without
@@ -177,6 +236,9 @@ TESTS = [
     test_missing_load_bearing_fails,
     test_rtol_breach_fails,
     test_missing_baselines_file_skips_gracefully,
+    test_vram_drift_fails_load_bearing,
+    test_vram_shrink_is_not_a_failure,
+    test_h3_baselines_match_themselves,
 ]
 
 

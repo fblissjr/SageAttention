@@ -1043,6 +1043,47 @@ sufficient.
 > LTX-motivated throughout.
 
 
+### v0.7.13 -- 2026-09-08  (measurement provenance: which sage produced these numbers)
+
+Three gaps found by asking what today's changes left uncovered, rather than
+by anything failing.
+
+**1. Every bench log this fork has written says `sage: ?`.** The header
+reads `sageattention.__version__`, and the package never defined one while
+`setup.py` declared `2.2.0`. So the logs pin torch and triton and stay
+silent on the sage build the numbers came from -- the same class of hole as
+the env snapshot dropping the editable install in v0.7.x, in the file whose
+entire job is provenance. `__version__` now resolves from installed
+metadata, so it cannot drift from `setup.py`.
+
+Version alone is not enough on an editable install, where many commits share
+one, so the header additionally reports the source tree's git sha and marks
+it `-dirty` when the checkout has uncommitted changes. A measurement taken
+on uncommitted work is not reproducible from a sha, and that should be
+visible in the log rather than inferred later. The lookup never raises and
+never blocks: a missing git, a wheel install, or an unreadable checkout all
+degrade to printing the version alone.
+
+**2. The VRAM gate added in v0.7.10 had no unit test.** `check_regressions`
+has a test per branch in `tests/test_regression_check.py` -- perf drift,
+faster-is-informational, missing load-bearing row, rtol breach, speedup line,
+clean self-match -- and the branch added this morning had none. It had been
+seen firing once in an ad-hoc mutation run, which shows it *can* fire, not
+that it stays wired. Now covered both directions (a blowout fails, a
+shrink does not), and the new test was itself mutation-checked: disabling the
+branch in the harness turns it red.
+
+Also added: the H3 baselines self-match test. It exercises what the LTX file
+cannot -- entries carrying no `median_ms` at all, and a baseline set with no
+rtol entries -- pinning that the gate reads an absent key as "not checked"
+rather than as zero. Read as zero, every row would fail instead.
+
+**3. `test_regression_check.py` was not in `tests/run_all.sh`.** It guards
+the code that grades every other bench in that script, so the gate's own
+logic was the one thing the runner never checked. It is pure Python and
+fast; there was no reason for it to sit outside. Now in the correctness
+group.
+
 ### v0.7.12 -- 2026-09-08  (`run_all.sh` can pass again; the LTX witness re-baselined)
 
 `tests/run_all.sh` now exits 0 end to end. It could not since **v0.5.5
