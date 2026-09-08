@@ -11,36 +11,38 @@ this fork's accuracy against an approximate kernel's published figure.**
 The referent rule at the bottom is the one that has caused the most
 confusion.
 
-## The attention share, and why it is weaker evidence than it looks
+## The attention share: settled 2026-09-08, and it is a curve
 
-**Checked 2026-09-08. The only measured H3 attention share in this repo
-is 76% of the step, and it was taken at S=109,126 -- a 362-frame packed
-length, which is past H3's 15.0 s ceiling. 345 frames is the largest
-legal count, so that measurement is at a shape nobody can render**
-(`docs/minimax_h3_av_sampling.md`).
+**Quote it with a sequence length. A bare "attention is N% of H3" is not
+a well-formed claim,** because attention is O(S^2) where the projections,
+the MLP and the norms are O(S). Measured on the path that ships (INT8
+Linears), one DiT block, `docs/h3_workload_profile.md`:
 
-Three consequences, and the third is the one that matters:
+| clip | S | attention share of block |
+|---|---|---|
+| 124 frames, fl2va | 41,822 | **55.7%** |
+| 345 frames (ceiling), t2v | 104,030 | **75.6%** |
 
-1. **It is not 90%.** The figure repeated in conversation is higher than
-   the figure on record. Quote 76%, with its S.
-2. **It is at an illegal shape.** Not wrong as a kernel measurement --
-   the entry is careful to say read it as a measurement at that S -- but
-   it is not a statement about a render anyone performs.
-3. **It is biased upward for real renders, by construction.** Attention
-   is O(S^2) where most of the rest of a step is roughly O(S), so the
-   attention share *rises* with sequence length. The measured share sits
-   at an S well above the common case: a 124-frame fl2va render is
-   S=41,822, under half that length. So the share at the shapes actually
-   rendered should be **lower than 76%**, not higher. That direction is
-   reasoning from the complexity, not a measurement -- nobody has
-   profiled a legal H3 shape.
+**The long-standing 76% figure is vindicated, with one caveat retired and
+one kept.** It was measured at S=109,126 -- a 362-frame length, past H3's
+15.0 s ceiling, so at a shape nobody can render
+(`docs/minimax_h3_av_sampling.md`). The profile above reproduces it
+independently at S=104,030, which *is* renderable. So the number was
+sound; what was wrong was quoting it as if it were length-independent,
+and it is not 90%.
 
-**What this does to ranking.** "Attention is almost all of it, so
-attention work is the only work worth doing" is the argument that ranks
-everything on this model, and it rests on one number, at an unrenderable
-length, that is smaller than the version in circulation and points the
-wrong way for real shapes. It may well survive a proper profile. It has
-not had one.
+**Two denominators, and they are not interchangeable.** The shares above
+are of a **DiT block**. A separate bound below puts attention at **>= ~32%
+of a whole render**, which is a different and much larger denominator --
+it includes sampler overhead, text encoding, VAE decode and offload. A
+block share and a render share must never be quoted as confirming each
+other; this document did exactly that for part of 2026-09-08 and it was
+wrong.
+
+**What this does to ranking.** The premise that ranks work on this model
+-- attention is where the time is -- holds on the path that ships, at
+both lengths, and strengthens with clip length. Amdahl against a *render*
+should still use the ~32% floor rather than the block share.
 
 **A bound now exists, from an A/B rather than a profile (2026-09-08).**
 The consumer's five-scene ladder renders the same geometry under stock
@@ -100,7 +102,7 @@ the older record.
   | attention sites | self-attn + **masked cross-attn** (headline shape) | **one** call site, no cross-attn |
   | mask | load-bearing (drove the v0.5.5 kernel) | `mask=None` hardcoded; unreachable |
   | sequence | separate q/kv streams | one packed `[text\|refs\|audio\|video]` |
-  | **bottleneck** | mixed -- FFN is a real share (`docs/ltx_workload_profile.md`), attention is one part | attention dominates, but see the share note below -- "almost all of it" overstates what was measured |
+  | **bottleneck** | mixed -- FFN is a real share (`docs/ltx_workload_profile.md`), attention is one part | **attention: 56% of a DiT block at 124 frames, 76% at the ceiling** (INT8 path). Quote with an S |
 
   **The bottlenecks differ, so the work that pays differs, and for H3 the
   profile confirms it.** The FFN line is LTX-motivated and buys H3

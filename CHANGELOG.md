@@ -1077,6 +1077,75 @@ sufficient.
 > LTX-motivated throughout.
 
 
+### v0.7.16 -- 2026-09-08  (H3 workload profile: attention is 56% and 76%)
+
+`tests/bench_h3_block_profile.py` + `docs/h3_workload_profile.md`. The H3
+counterpart to the LTX workload profile, which is the input that ranks every
+perf bet and which H3 had never had.
+
+One DiT block, two sequence lengths, reporting **time and peak transient**
+per sub-module -- memory as well as speed, because on this model memory
+decides whether a render happens at all. On the path that ships (INT8
+Linears, the SwiGLU folded into fc2's input quantizer): attention is 55.7% of
+a block at 124 frames and 75.6% at the 345-frame ceiling. Attention is O(S^2)
+against O(S) for everything else, so a bare "attention is N% of H3" is not a
+well-formed claim -- quote it with a sequence length.
+
+The 75.6% independently reproduces the repo's long-standing 76% figure,
+measured at a near-identical length on the same path. That vindicates the
+number and retires only the criticism that it was quoted as
+length-independent and taken past the legal ceiling.
+
+**Memory: `mlp fc1` is the largest single transient at both lengths**, above
+the fused QKV buffer and above the attention kernel's working set. That is a
+different finding from where time goes, and it survives every correction
+below because both terms scale the same way.
+
+**Three wrong conclusions were published from this file before it was
+right,** and they are kept in the doc rather than dropped. A first version
+used bf16 `nn.Linear`, which nothing runs: on that path attention read 35.6%
+at 124 frames against the MLP's 38.2%, and this repo briefly concluded that
+the MLP was the larger share, that `sage_ffn`'s parking had been falsified,
+and that the ranking flipped with clip length. All three were artifacts of
+the weight format. `sage_ffn`'s parking was never falsified.
+
+The rule that was violated is this repo's own -- *measure the config that
+ships* -- in the file written to settle a ranking question. It survived two
+rounds of self-correction because each round re-examined the sequence length
+and never the weight format, which is the axis-promotion pattern recorded in
+`docs/drift_audit_and_directions.md`.
+
+Harness defect fixed alongside: stages allocated every input up front,
+holding roughly 19 GB at the ceiling length and OOMing every interesting
+stage. They build lazily and free between stages now.
+
+### v0.7.15 -- 2026-09-08  (`build_info()`, and a check that upstream still means what we say)
+
+Two additions, both answering "what would notice if this stopped being true".
+
+**`sageattention.build_info()`** -- version, revision, dirty, describe.
+`__version__` is a constant that does not move when the kernels are rebuilt,
+so it cannot distinguish one build of this fork from another; a downstream
+consumer's dated evaluation records had identified us by it across a full
+rebuild under a changed standard, compiler and headers. Not computed at
+import, cached, and every failure path degrades to unknown. `dirty` reflects
+tracked files only -- an untracked scratch file in the checkout does not
+change the kernels. Pinned by `tests/test_build_info_contract.py`, listed in
+`docs/downstream_symbols.md` as a contract with a known consumer, and
+`revision` is fixed at 12 characters so one commit cannot stamp two widths.
+
+**`tests/test_upstream_contracts.py`** -- four checks against the installed
+consumer stack, parsing rather than importing: H3's attention call site
+passes no mask, the single-owner container protocol still has `peek`/`take`,
+whether the caller gives `v` independent storage (informational), and whether
+the consumer still introspects a signature around `attn_mask`. Each names the
+documented claim it guards.
+
+It **skips loudly**: an absent consumer prints "ran 0 of 4 checks. This is a
+SKIP, not a pass", because a skip that reads like a pass reproduces the
+failure class it exists to end. Verified against a fabricated tree where every
+claim is false, not only against the tree where they hold.
+
 ### v0.7.14 -- 2026-09-08  (`fused_rope_split` removed: the consumer's own library does it better)
 
 Deletes `sageattention/triton/fused_rope.py`, `tests/test_fused_rope.py`,

@@ -332,7 +332,7 @@ speedup-ratio floor breach.
 
 Bench env (torch / triton / CUDA / sage rev) pinned to
 `internal/bench_env_<date>.txt`; resnapshot after any version bump
-per `docs/bench_env_discipline.md`.
+per `docs/bench_discipline.md`.
 
 ## How we detect unintended side effects
 
