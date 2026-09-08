@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-05-23
+Last updated: 2026-09-08
 
 > **Model scope: written pre-H3.** "Relevance to the current workload"
 > below meant **LTX 2.3** at the time of writing; MiniMax H3 entered this
@@ -512,10 +512,17 @@ support and we walk back the v0.6.5 wrapper assert to defense-in-depth.
 
 ### torchao primitives
 
-A local torchao checkout is available; `./build_torchao.sh` does
-editable install + diagnostic verify (active-venv enforcement,
-force-reinstall to defeat uv's "already installed" short-circuit
-after a torchao git pull).
+**There is no local torchao checkout any more** -- it was deleted
+2026-09-08 to reclaim disk, having gone unused since this item was
+written and never been installed into either ComfyUI venv.
+`./build_torchao.sh` is still here and still correct; it expects a
+`coderef/ao` symlink and exits with the `ln -s` command to create one,
+so acting on this item starts with re-cloning `pytorch/ao`. The script
+does editable install + diagnostic verify (active-venv enforcement,
+force-reinstall to defeat uv's "already installed" short-circuit after
+a torchao git pull). Two local stashes from that checkout were saved as
+patches outside the repo rather than discarded; the substantive one
+shrank `setup.py`, which is consistent with the sm89 finding below.
 
 **Honest about what torchao 0.18 ships on sm89:** the pure-Python
 `addmm_float8_unwrapped_inference` (a thin wrapper around
