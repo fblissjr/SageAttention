@@ -451,6 +451,32 @@ that is ours. If it does not, we learn what our fp8 PV path is actually
 worth against a serious comparand, which is a number this repo has never
 had. Either outcome is worth more than most of the queued work.
 
+**D1b. Our whole memory line sits downstream of where the saving is
+(2026-09-08).** The consumer added a forward that takes chunks of the
+*fused projection output*, applies the per-head norm and rope per chunk
+itself, and routes attention without ever holding full Q, K and V.
+Upstream reports roughly 5 GB less peak at ~113k tokens.
+
+The seam matters more than the number. `optimized_attention` hands a
+patch **finished** Q, K and V, so by the time any override at that seam
+runs -- ours included -- the allocation is already spent. That new
+forward replaces the module's forward instead, reaching the projection.
+
+Read against this fork's memory work: `sageattn_consume`, the
+caller-side `v` clone, and the `per_channel_fp8` transpose-buffer item
+are all recovering hundreds of MiB *after* the point where a
+producer-side approach saves gigabytes. None of them is wrong, and the
+consume path is still correct and bit-identical -- but they are capped
+by their seam, and the cap is roughly an order of magnitude below the
+alternative. Any future memory work here should start by asking whether
+it can reach the projection, and if it cannot, whether it is worth doing
+at all.
+
+Corroborating, from the consumer session: in their shipped configuration
+head chunking cannot reach the path that actually OOMs either -- the
+pressure is in the sparse kernel, which chunking does not touch at any
+value. So both of our headroom levers miss the binding constraint.
+
 **D2. That library is also the binding model worth copying.** It carries
 no framework symbols in its dynamic dependencies and registers its ops
 on the Python side, so it survives framework upgrades without a rebuild.
