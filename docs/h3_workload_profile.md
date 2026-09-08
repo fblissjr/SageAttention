@@ -110,6 +110,42 @@ it is created. They recover hundreds of MiB downstream of a producer-side
 approach that reportedly saves gigabytes, and the largest allocation in the
 block is not in their path at all.
 
+## VALIDITY WARNING: this measured a configuration nobody runs
+
+**Added 2026-09-08, hours after the profile. Read before acting on any
+number above.**
+
+This profile used plain bf16 `nn.Linear` for the projections and the MLP.
+**Production does not.** The consumer's H3 base is INT8 ConvRot, so every
+Linear in a real render goes through `comfy/ops.py::linear_input_act` into
+`comfy_kitchen.int8_linear` -- a different kernel with different speed and
+different memory behaviour. Only the attention arm matches what ships.
+
+Two consequences, in opposite directions, and neither is small:
+
+**Time.** An INT8 linear should be faster than the bf16 one measured here.
+If so, every Linear row above is inflated and **attention's share is
+understated at both lengths** -- so the "MLP is larger at 124 frames"
+finding may not survive on the real path at all.
+
+**Memory.** A trajectory trace shows the block peaks not at `fc1` but just
+after the SwiGLU, where fc1's output and the SwiGLU's output are live
+together (5746 MiB at S=41,822, against 4320 reached during attention).
+That concurrency is exactly what `linear_input_act` fuses away on the INT8
+path -- the activation rides inside fc2's quantizer instead of writing a
+full-size intermediate. **So the peak this profile found is plausibly an
+artifact of the bf16 path and may not exist in production.**
+
+This is the repo's own "measure the config that ships" rule, violated in
+the file written to settle a ranking question. The shares here are
+suggestive and the method is reusable; the numbers should not be quoted
+about production until re-run against the quantized Linears, either by
+constructing INT8 weights or by profiling a real render.
+
+What survives regardless: attention's share rises steeply with clip length
+(O(S^2) against O(S)), so any single-number claim about "the attention
+share of H3" is wrong whatever the weight format.
+
 ## Limits, so this is not over-read
 
 **Isolation evidence, Cell A/B, not delivered.** One block, synthetic weights,
