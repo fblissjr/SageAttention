@@ -56,8 +56,13 @@ echo "[1/6] snapshotting env -> ${ENV_FILE}"
     echo "# venv: replaced for privacy"
     echo
     if [ -x "${UV}" ]; then
+        # The editable sage install lists as "-e file:///..." rather than
+        # "sageattention==", so an anchored name match silently dropped the
+        # one package these numbers are actually about. Match the editable
+        # line too, and strip the path so the snapshot stays repo-relative.
         VIRTUAL_ENV="${VENV_DIR}" "${UV}" pip freeze 2>/dev/null \
-            | grep -iE "^(torch|triton|sageattention|flashinfer|spas)" \
+            | grep -iE "^(torch|triton|sageattention|flashinfer|spas)|^-e .*sage" \
+            | sed 's|^-e file://.*|sageattention @ editable (this repo)|' \
             | sort
     else
         "${PY}" -c "
