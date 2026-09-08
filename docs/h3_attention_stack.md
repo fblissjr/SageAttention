@@ -24,17 +24,21 @@ per-sub-module table at two clip lengths on the path that ships, and
 here; this document goes stale, that one is dated and re-runnable.
 
 **Status of the long-standing figure.** The share this repo quoted for
-months was measured past H3's legal frame ceiling, at a shape nobody can
-render (`docs/minimax_h3_av_sampling.md`). The profile reproduces it
-closely at a renderable length on the same path, so the number was sound.
-What was wrong was quoting it as though it were length-independent.
+months was measured at the top of H3's trained range. **It is not an
+illegal length, and this repo said otherwise for three weeks.** 362 frames is the top of H3's trained range, not an illegal length. The consumer withdrew the "345 is the largest legal count" claim on 2026-08-16 as an owner decision: 345 is the largest count *diffusers* emits, a fact about diffusers, while ComfyUI's node accepts far more and names ~124-362 as the trained range. This repo carried the withdrawn version for three weeks and propagated it on 2026-09-08.
+The profile reproduces the figure closely at a slightly shorter length on
+the same path, so the number was sound. What survives as fair criticism is
+only that it was quoted as though length-independent.
 
-**Two denominators, and they are not interchangeable.** The profile reports
-shares of a **DiT block**. The bound below is of a **whole render**, which
-additionally carries sampler overhead, text encoding, VAE decode and
-offload. A block share and a render share must never be quoted as
-confirming each other; this document did exactly that for part of
-2026-09-08 and it was wrong.
+**Three denominators, and none of them are interchangeable.** The profile
+reports shares of a **DiT block**. The consumer's bound is of **sampler
+time**. A derivation done here from wall totals is of a **whole render**,
+which additionally carries text encoding, VAE decode and model loading.
+None of these confirms another, and they must never be paired as
+corroboration -- this document did exactly that for part of 2026-09-08 and
+it was wrong twice: once pairing a block share with a render bound, and
+once treating a sampler-time floor and a wall-time floor as one result
+because their figures were close.
 
 **What this does to ranking.** The premise that ranks work on this model --
 attention is where the time is -- holds on the path that ships, at every
@@ -47,8 +51,13 @@ The consumer's five-scene ladder renders identical geometry under stock
 dense attention, this fork alone, and the approximate override alone. Let N
 be non-attention time, constant across arms; N cannot exceed the fastest
 arm's total, because attention time in that arm cannot be negative. That
-yields a floor on attention's share of a render for both the dense and the
-sage configuration, the second being the one that ranks this fork's work.
+yields a floor on attention's share for both the dense and the sage
+configuration, the second being the one that ranks this fork's work. The
+consumer's authoritative version is over **sampler time** and lives in their
+`bench/results/` as a dated record with canvas, length and weight format
+read off the source rather than written by hand; a version derived here from
+wall totals is a different and larger denominator, and the two are not the
+same quantity even though their figures are close.
 
 Both are floors, not estimates: neither this fork nor the override makes
 attention free. The derivation and its figures are recorded in CHANGELOG
@@ -126,10 +135,10 @@ the older record.
   > **Dated record -- consumer-side e2e, 2026-08-14.** This is the only
   > home these figures have; nothing else in the repo records them, so
   > they are kept here as a record rather than pointed at.
-  > Override-on against sage-alone at a 362-frame packed length. Note the
-  > length is **out of ceiling** -- H3 rejects past 15.0 s after the 17n+5
-  > snap, so 345 is the largest legal count. The ratio is still a ratio,
-  > but it was taken at a shape nobody can render.
+  > Override-on against sage-alone at a 362-frame packed length -- the top
+  > of the trained range, and a legal shape. An earlier version of this
+  > block called it out of ceiling on a claim the consumer withdrew on
+  > 2026-08-16; see `docs/h3_workload_profile.md`.
   > Override-on 493.4 s; sage-alone 794.7 s; ratio 1.61x.
   > The sage-alone arm ran `fp8_cuda++` while the graphs of the day
   > shipped `fp16_cuda`, so it understated.

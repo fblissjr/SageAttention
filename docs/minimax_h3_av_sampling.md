@@ -157,9 +157,11 @@ attention share of the step are all untouched. So:
 - the v0.7.0 mask-probe fix and the int32 quant-overflow fix
 - the 757.7 ms per-call figure and the 76%-of-step attention share, both
   taken at S=109,126 (a 362-frame packed length; see the v0.7.1 note --
-  362 frames is past H3's 15.0 s ceiling and 345 is the largest legal
-  count, so read these as measurements at that S, not at a renderable
-  shape)
+  362 frames is the top of H3's trained range and a legal length -- the
+  "345 is the largest legal count" claim was withdrawn by the consumer on
+  2026-08-16 as a fact about diffusers rather than about H3, and this
+  repo carried the withdrawn version until 2026-09-08. Read these as
+  measurements at that S, which is a demanding but renderable shape)
 
 all stand as kernel measurements. Nothing in this PR touches the attention path.
 

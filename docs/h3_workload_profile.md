@@ -66,15 +66,23 @@ rises steeply with length**, because attention is O(S^2) where everything
 else in the block is O(S). A single number for "H3's attention share" is
 therefore not a well-formed claim -- quote it with a sequence length.
 
-**The long-standing figure is vindicated.** It was measured past H3's legal
-frame ceiling, so at a shape nobody can render
-(`docs/minimax_h3_av_sampling.md`). The ceiling row above reproduces it
-independently at a renderable length on the same path. So the number was
-sound; what was wrong was quoting it as though length-independent, and
-believing the larger version that circulated in conversation.
+**The long-standing figure is vindicated, and my criticism of it was
+half wrong.** I attacked it partly for being measured at an illegal length.
+It was not: 362 frames is the top of H3's trained range, not an illegal length. The consumer withdrew the "345 is the largest legal count" claim on 2026-08-16 as an owner decision: 345 is the largest count *diffusers* emits, a fact about diffusers, while ComfyUI's node accepts far more and names ~124-362 as the trained range. This repo carried the withdrawn version for three weeks and propagated it on 2026-09-08. The long row above reproduces the figure
+independently at a slightly shorter length on the same path, so the number
+was sound. What survives as fair criticism is only that it was quoted as
+though length-independent, and that the larger version circulating in
+conversation was never the recorded one.
 
 **The MLP never exceeds attention on the production path**, at either
 length.
+
+**The weight format changed two quantities by two different mechanisms, and
+they need separate conditions.** An INT8 Linear being faster than a bf16 one
+*raises attention's share of block time*. A fused epilogue removing the
+SwiGLU concurrency *changes where the memory peak sits*. Neither result is
+evidence for the other, and a reader who pairs them will reach a conclusion
+neither supports.
 
 **Memory is a separate question from time, and it answers differently.**
 `mlp fc1` holds the largest single transient at both lengths -- above the
