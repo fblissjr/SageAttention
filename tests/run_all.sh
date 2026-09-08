@@ -77,27 +77,12 @@ for m in ['torch', 'triton', 'sageattention']:
     fi
 } > "${ENV_FILE}"
 
-# 2. LTX-shape bench (video d=128, audio d=64) with regression gate.
-# --check-regression exits non-zero on perf drift > 5%, rtol > 0.10,
-# speedup-ratio floor breach, or missing load-bearing measurement.
-# Tee captures the full output before set -e bails on a non-zero exit.
-echo "[2/6] running tests/test_sageattn_ltx_shapes.py --check-regression"
-set +e
-"${PY}" tests/test_sageattn_ltx_shapes.py --check-regression 2>&1 | tee "${BENCH_LOG}"
-LTX_EXIT="${PIPESTATUS[0]}"
-set -e
-if [ "${LTX_EXIT}" -ne 0 ]; then
-    echo "error: LTX bench exited ${LTX_EXIT} (regression detected). See ${BENCH_LOG}." >&2
-    exit "${LTX_EXIT}"
-fi
-
-# 3. H3-shape bench (packed AV self-attn, 56 heads, d=128) with its own gate.
-# Separate baselines file because H3 gates different quantities than LTX:
-# speed, peak VRAM and cross-kernel fidelity, but NOT rtol against SDPA --
-# that number is not a measurement at H3 config on synthetic input. See the
-# bench's module docstring.
-echo
-echo "[3/6] running tests/test_sageattn_h3_shapes.py --check-regression"
+# 2. H3-shape bench (packed AV self-attn, 56 heads, d=128). THE gate.
+# H3 is the only current optimization target, so this run decides whether the
+# suite passed. It gates speed, peak VRAM and cross-kernel fidelity -- but NOT
+# rtol against SDPA, which is not a measurement at H3 config on synthetic
+# input. See the bench's module docstring.
+echo "[2/6] running tests/test_sageattn_h3_shapes.py --check-regression"
 set +e
 "${PY}" tests/test_sageattn_h3_shapes.py --check-regression 2>&1 | tee "${H3_LOG}"
 H3_EXIT="${PIPESTATUS[0]}"
@@ -107,13 +92,32 @@ if [ "${H3_EXIT}" -ne 0 ]; then
     exit "${H3_EXIT}"
 fi
 
+# 3. LTX-shape bench. NON-BLOCKING as of 2026-09-08: LTX is not a current
+# target, so an LTX regression must not prevent the correctness suites below
+# from running -- which is exactly what a stale LTX baseline did for four
+# months (CHANGELOG v0.7.12). It still runs and still reports, because the
+# kernels are shared: a real numerical regression would surface here first, at
+# a second head config and a masked path H3 never exercises. Re-blocking is
+# one `exit` away if LTX becomes a target again.
+echo
+echo "[3/6] running tests/test_sageattn_ltx_shapes.py --check-regression (non-blocking)"
+set +e
+"${PY}" tests/test_sageattn_ltx_shapes.py --check-regression 2>&1 | tee "${BENCH_LOG}"
+LTX_EXIT="${PIPESTATUS[0]}"
+set -e
+if [ "${LTX_EXIT}" -ne 0 ]; then
+    echo "WARNING: LTX bench exited ${LTX_EXIT}. Not a current target, so it does" >&2
+    echo "         not fail the suite -- but read ${BENCH_LOG} before assuming it" >&2
+    echo "         is only LTX: these kernels are shared with the H3 path." >&2
+fi
+
 # 4. Image-shape bench (head_dim ∈ {120, 128}). Separate file so the
 # LTX file stays focused; both reuse the same dispatch helpers.
 echo
 echo "[4/6] running tests/test_sageattn_image_shapes.py"
 "${PY}" tests/test_sageattn_image_shapes.py 2>&1 | tee "${IMAGE_LOG}"
 
-# 4. Correctness suites that gate on an assertion rather than a number.
+# 5. Correctness suites that gate on an assertion rather than a number.
 # These are fast and have no baseline to drift, so they run unconditionally
 # and fail the whole script -- unlike the benches above, a failure here is
 # a defect, not a measurement.
@@ -132,7 +136,7 @@ for t in test_quant_offset_overflow test_sageattn_consume test_dispatched_kernel
     }
 done
 
-# 5. torch.compile spike.
+# 6. torch.compile spike.
 echo
 echo "[6/6] running tests/spike_torch_compile.py"
 "${PY}" tests/spike_torch_compile.py 2>&1 | tee "${SPIKE_LOG}"

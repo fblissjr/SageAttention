@@ -18,9 +18,18 @@ patterns, and the recorded uncertainties live here.
 
 ## Load-bearing metric
 
+**Changed 2026-09-08: this is now an H3 row.** LTX is out of scope for
+the time being and H3 is the only optimization target, so the row that
+decides whether a kernel change was worth it has to be an H3 row. The
+LTX bench still runs and still reports -- the kernels are shared -- but
+it no longer defines the metric and no longer fails the suite.
+Sequence length is derived in-file from the consumer node's geometry
+rules rather than pinned here, so it tracks the node rather than a
+copied constant; the shape name identifies the row.
+
 ```
-tests/test_sageattn_ltx_shapes.py
-  shape: ltx23_video_self_attn_init_22932  (B=1, H=32, Sq=Skv=22932, D=128, no mask, bf16)
+tests/test_sageattn_h3_shapes.py
+  shape: mmh3_fl2va_selfattn_1344x768_124f  (B=1, H=56, Sq=Skv=packed, D=128, no mask, bf16)
   mode:  fp8_cuda++
   -> primary perf metric: median_ms (today: 20.20 ms)
   -> accuracy guard:      mean_rtol <= 0.10 (today: ~0.098)

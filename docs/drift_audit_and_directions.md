@@ -208,8 +208,64 @@ library the consumer already loads.
 
 ## Does any of this explain unsatisfying renders?
 
-Asked during the audit, and worth answering carefully because the
-tempting answer is wrong.
+**Answered 2026-09-08, from evidence that already existed.** The
+consumer repo had already run a blind, seed-matched, five-scene ladder
+on 2026-09-03 pitting stock dense attention against this fork alone and
+against several stacked configurations, and graded the pairs. It had not
+been read in this direction. The result:
+
+**Dense versus this fork alone: indistinguishable on four of five
+scenes** -- graded "same" or "can't tell", with both halves tagged good.
+On the fifth the grader gave dense a narrow win and wrote that both were
+"pretty good given all the motion". That fifth scene is the one where
+*every* arm loses to dense, including the two approximate-attention
+configurations and the step-distilled one, which makes it a
+scene-difficulty result rather than a finding about any kernel.
+
+Two things make this stronger than a five-sample result usually is.
+First, **every arm above dense carries this fork**, so a defect here
+would have to show up in all of them rather than in one isolated pair.
+Second, dense-versus-ours is the only contrast in the set that isolates
+this fork, and it is the one that came back clean.
+
+**Where dissatisfaction more plausibly comes from, on the same data:**
+the step-distilled arm lost to dense on **all five** scenes. That arm is
+confounded by construction -- the repo's own note records that it
+carries this fork, the approximate override, and a distillation-specific
+override setting together, so no arm renders it in isolation and the
+loss does not attribute to any one of them. But it does say the
+attention kernel is not the first place to look.
+
+**Caveats, because this is a real result and should not be overstated.**
+One seed, one pair per contest, five pairs total -- the verdict file's
+own reading field says it is "a preference over distributions", and with
+one pair the distribution is a single sample. The per-clip tab of the
+same session was never scored, only the pairwise one, and the export is
+marked partial. Enough to say there is no gross defect; not enough to
+rule out a small quality cost.
+
+**And the build under test was not this one.** Those renders predate the
+framework upgrade and the C++20 rebuild. The toolkit comparison done the
+same day showed bit-identical kernel output between two compilers, but
+that is not the same comparison: nothing here compares the pre-upgrade
+build against the current one, and the older standard cannot be rebuilt
+against the current framework to try. So the evidence is about the build
+that shipped then. If a future change alters kernel behaviour rather
+than only recompiling it, this ladder does not cover it -- which is the
+standing-accuracy-gate gap again, from the other direction.
+
+**The one thread worth pulling, and not yet.** The single loss came with
+a named artifact on the highest-motion scene. On one pair that is not
+separable from sampling. Settling it is cheap -- that scene, a couple
+more seeds, same protocol, the two isolating graphs -- and it is a
+render budget decision for the owner, not something to launch off a
+single grader note.
+
+**What this does not retire** is the gap below: there is still no
+standing accuracy gate for this model, so the next regression would
+again be found by someone looking rather than by something failing.
+
+The original analysis follows, and its conclusion is unchanged.
 
 **Nothing found here changes kernel output.** The toolkit change was
 verified bit-identical across both fp8 accumulator variants, the

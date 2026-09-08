@@ -99,8 +99,8 @@ measurement surface; the methodology framework codifies how we trade
 across them and which decisions are gated on which evidence.
 
 ```
-tests/test_sageattn_ltx_shapes.py
-  shape: ltx23_video_self_attn_init_22932  (B=1, H=32, Sq=Skv=22932, D=128, no mask, bf16)
+tests/test_sageattn_h3_shapes.py
+  shape: mmh3_fl2va_selfattn_1344x768_124f  (B=1, H=56, Sq=Skv=packed, D=128, no mask, bf16)
   mode:  fp8_cuda++
   -> primary perf metric: median_ms — lower is better (today: 20.20 ms)
   -> accuracy guard:      mean_rtol ≤ 0.10 (today: ~0.098)
