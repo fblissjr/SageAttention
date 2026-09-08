@@ -111,30 +111,6 @@ Recorded: 2026-08-05, while validating the Triton fix at 362 frames.
 Real open TODOs. Each has an explicit trigger-to-act; we don't do these
 speculatively.
 
-### Re-test whether the `KNOWN_BAD_CUDA` guard in `build.sh` is still needed
-
-`build.sh` auto-switches away from the nvcc release recorded in
-`KNOWN_BAD_CUDA` because its cudafe++ front-end miscompiled the torch
-headers of the day (the `List_inl.h` "need 'typename'" failure; mechanism
-and the same-TU A/B are under v0.6.6). That verdict was reached against
-torch headers that have since been replaced -- the C++20 bump in v0.7.8
-means every TU now compiles under a different language standard as well.
-A single torch-including TU compiles clean under the guarded nvcc with
-the current headers, which is suggestive and nothing more: one TU is not
-the seven-kernel build, and the guard is cheap while it stands.
-
-**Trigger to act:** wanting the guarded toolkit for a real reason (a
-feature only it exposes, or the good toolkit being uninstalled). Then run
-a full `./build.sh clean` with `SAGE_SKIP_CUDA_GUARD=1` as its own arm,
-compare against a build on the good toolkit, and if it passes, drop the
-version from `KNOWN_BAD_CUDA` and retire the memory entry that records
-the breakage. Do not retire it on the strength of a single TU.
-
-**Note for whoever picks this up:** the working tree may carry a local
-edit blanking `KNOWN_BAD_CUDA`. That disables the guard silently and is
-not the committed state -- check `git diff build.sh` before concluding
-the guard is off by design.
-
 ### Drop `per_channel_fp8`'s full-size bf16 transpose buffer -- SUPERSEDED 2026-08-06, not withdrawn
 
 **Superseded by consumer-side head-group chunking. Do not start this as a
@@ -1045,6 +1021,54 @@ sufficient.
 > and never confirms an H3 claim. `sage_ffn` and the whole FFN line are
 > LTX-motivated throughout.
 
+
+### v0.7.9 -- 2026-09-08  (`KNOWN_BAD_CUDA` retired: the headers moved, not nvcc)
+
+**`build.sh`: `KNOWN_BAD_CUDA` is now empty.** The guard mechanism stays --
+this failure mode recurs and re-arming it is one string -- but nvcc 13.3 is
+no longer on the list, so the newest installed toolkit builds by default.
+
+**What changed underneath.** v0.6.6 recorded that nvcc 13.3 failed every
+`.cu` in `ATen/core/List_inl.h` with a spurious "need 'typename'" error,
+proven by a same-TU A/B. That finding was correct and is now expired: the
+torch headers it failed on were replaced (see v0.7.8), and against the
+current ones the full seven-kernel build compiles clean on 13.3. nvcc did
+not get fixed; the code it was choking on stopped existing. A finding with
+a dependency that moves hourly needs its expiry condition named, and this
+one's was "torch headers change" -- see `docs/moving_targets.md`.
+
+**Four checks, because "it compiled" is not the question.**
+
+1. *Does the whole kernel set build?* Full `./build.sh clean` on 13.3 with
+   torch 2.14 headers: all three extensions compile and import. A single
+   TU had already passed, which is why that was explicitly not treated as
+   sufficient when this was opened as a Backlog item.
+2. *Does a 13.3-built object run against torch's older CUDA runtime?* This
+   is the real mixing question and it is a link-time one. Our `.so` binds
+   `libcudart.so.13` by soname, and in a torch process torch's own bundled
+   copy is already loaded, so ours resolves against **that**, not against
+   the toolkit that compiled it. The risk is therefore referencing a symbol
+   introduced after that runtime. Checked directly with `nm -D`: every CUDA
+   runtime symbol the three 13.3-built extensions import is defined by the
+   runtime torch ships. The check was run with a deliberately fake symbol
+   first, to confirm it can report a miss -- an earlier version of it
+   compared version-suffixed names against bare ones and called everything
+   missing.
+3. *Did codegen move?* Outputs captured on fixed seeded inputs before and
+   after the toolkit switch are **bit-identical** (`uint16` view, so NaN
+   equality semantics don't mask a difference) across both PV-accum fp8
+   variants, the sm80 fp16 kernel, and the `kGeneral` masked path. This is
+   a fidelity question, so synthetic input is correct here and real
+   activations would add nothing.
+4. *Does the gate agree?* `tests/test_sageattn_ltx_shapes.py
+   --check-regression` fires the same two stale-baseline flags as the 13.2
+   build and nothing else.
+
+**Which toolkit to build with, then: either.** Bit-identical output means
+13.3 buys no codegen improvement over 13.2, and costs nothing either. sm89
+is a fixed target -- a newer CUDA major adds no instructions Ada can issue
+-- so a toolkit bump on this fork should be expected to be neutral, and
+this one measured neutral. Pin whichever you like.
 
 ### v0.7.8 -- 2026-09-08  (build: C++17 -> C++20, forced by torch)
 

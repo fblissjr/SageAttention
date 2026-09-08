@@ -63,12 +63,16 @@ if [[ -z "${VIRTUAL_ENV:-}" ]]; then
 fi
 
 # --- CUDA toolkit selection ---
-# nvcc 13.3 ships a cudafe++ front-end regression that miscompiles PyTorch's
-# bundled headers: every .cu fails in ATen/core/List_inl.h with a spurious
-# "need 'typename' before ...::difference_type" error, even though the source
-# is valid (proven by a same-TU A/B -- 13.3 fails, 13.2 compiles clean; the
-# host g++ and sage's own sources are fine, it is purely the nvcc version).
-# So if the *active* toolkit is a known-broken version, switch to the newest
+# The list is empty and the guard is dormant. It is kept because this failure
+# mode recurs: a toolkit release miscompiles the torch headers of the day, and
+# the fix is to build with a different toolkit rather than to debug it. nvcc
+# 13.3 was listed here from v0.6.6 until v0.7.9 for exactly that (a cudafe++
+# front-end regression that failed every .cu in ATen/core/List_inl.h with a
+# spurious "need 'typename' before ...::difference_type"); it no longer
+# reproduces, because the torch headers changed underneath it, not nvcc. The
+# retirement evidence is under v0.7.9 in the CHANGELOG. To re-arm, put the
+# offending release back in KNOWN_BAD_CUDA, space-delimited on both sides.
+# If the *active* toolkit is a listed version, switch to the newest
 # installed toolkit that is NOT in the broken set. This overrides even a
 # pre-exported CUDA_HOME -- a global CUDA_HOME=/usr/local/cuda is common and
 # usually points at the default/latest (broken) toolkit, so it can't be
@@ -77,7 +81,7 @@ fi
 # KNOWN_BAD_CUDA once a fixed nvcc for it ships.
 # Overrides: pick a good toolkit with `CUDA_HOME=/usr/local/cuda-X.Y
 # ./build.sh`; force the broken one anyway with `SAGE_SKIP_CUDA_GUARD=1`.
-KNOWN_BAD_CUDA=" 13.3 "
+KNOWN_BAD_CUDA=""
 
 _nvcc_ver() { "$1" --version 2>/dev/null | grep -oP 'release \K[0-9]+\.[0-9]+' | head -1; }
 
