@@ -117,8 +117,8 @@ work surface:
 - `setup.py` -- builds `_qattn_sm80`, `_qattn_sm89`, `_fused`. Our
   patch at line 152 adds sm89 to the SM80 build gate.
 - `build.sh` -- editable-install wrapper. Enforces `VIRTUAL_ENV`,
-  `--python` pin, MAX_JOBS cap, and auto-avoids known-broken CUDA
-  toolkits (nvcc 13.3) -- see Install / build.
+  `--python` pin, MAX_JOBS cap, an interpreter-scoped `clean`, and a
+  dormant known-bad-toolkit guard -- see Install / build.
 
 Full upstream-vs-ours inventory in `docs/whats_ours_vs_upstream.md`.
 Mission and forward directions in `VISION.md` + `docs/roadmap.md`.
@@ -134,9 +134,21 @@ for env snapshots.
 source /path/to/venv/bin/activate
 cd /path/to/sage-fork
 ./build.sh                # build + install editable into $VIRTUAL_ENV
-./build.sh clean          # wipe prior .so / build/ artifacts first
+./build.sh clean          # wipe THIS interpreter's artifacts first, then build
+./build.sh clean-all      # wipe every interpreter's artifacts, then build
 ./build.sh verify         # import-check only, no rebuild
 ```
+
+**More than one venv can share this checkout, and `clean` is scoped so
+they can.** The `.so` files live in the source tree every editable
+install points at, and they are tagged per interpreter
+(`cpython-313` / `cpython-314`), not abi3 -- so venvs on different Python
+versions coexist only by each leaving its own tagged `.so` here. Plain
+`clean` removes just the tag it is about to rebuild; `clean-all` is the
+blanket wipe, after which every *other* venv needs a plain `./build.sh`
+to get its kernels back. Getting this wrong is silent from the affected
+venv's side: it fails at `from . import _fused` with nothing in its own
+environment having changed.
 
 **Run `./build.sh` (or `./build.sh clean`), NOT `uv pip install -e .
 -U`.** build.sh pins the active venv, caps `MAX_JOBS`, holds torch fixed
@@ -146,13 +158,30 @@ over ComfyUI's pinned build; if you upgrade torch deliberately, rebuild
 sage afterward (the `.so` is ABI-bound to torch). Build is 60-90s on an
 8-core box with MAX_JOBS=8.
 
-**CUDA toolkit:** nvcc 13.3 miscompiles PyTorch headers, so `build.sh`
-auto-switches the build to the newest non-broken installed toolkit
-(13.2 here) -- even when a global `CUDA_HOME=/usr/local/cuda` points at
-the broken default. Override with `CUDA_HOME=/usr/local/cuda-X.Y` (pick
-another) or `SAGE_SKIP_CUDA_GUARD=1` (force the broken one); the `.so`
-runs fine on a 13.3 driver. Mechanism + same-TU A/B in CHANGELOG v0.6.6;
-remove 13.3 from `KNOWN_BAD_CUDA` in `build.sh` once nvcc is fixed.
+**CUDA toolkit: pick either, they are equivalent here.** `build.sh`'s
+`KNOWN_BAD_CUDA` guard is present but **empty** as of v0.7.9, so the
+newest toolkit on `PATH` builds. 13.2 and 13.3 were measured producing
+**bit-identical** kernel output across both fp8 PV-accum variants, the
+sm80 kernel and the masked `kGeneral` path, and sm89 is a fixed target
+so a toolkit bump adds no issuable instructions -- expect neutral, and
+it measured neutral. Override with `CUDA_HOME=/usr/local/cuda-X.Y`.
+Re-arm the guard by putting a release back in `KNOWN_BAD_CUDA`
+(space-delimited both sides) if a future nvcc breaks the torch headers
+again, which is the failure this mechanism exists for; v0.6.6 records
+the one time it did and v0.7.9 records why that expired.
+
+**Torch sets the C++ standard, and it is a hard floor.** `setup.py`
+compiles at `-std=c++20` because torch >= 2.14's headers `#error` below
+`__cplusplus 202002L` (`torch/all.h`, `ATen/ATen.h`). A checkout from
+before v0.7.8 cannot build against such a torch at all -- every
+translation unit that reaches `torch/extension.h` fails, so the symptom
+is a wall of identical errors rather than one bad file.
+
+**torchaudio is stricter than torch about CUDA.** Not our dependency,
+but it shares the venv: torch only *warns* on a minor CUDA mismatch
+while torchaudio *raises* at import and takes ComfyUI's startup with it.
+So a from-source torchaudio must be built against torch's exact CUDA
+minor even while sage is free to use any.
 
 After a build, restart ComfyUI to load the fresh `.so` files.
 

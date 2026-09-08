@@ -289,18 +289,6 @@ and no ComfyUI path reaches `sageattn_varlen` for us to test against.
 **Trigger:** a consumer adopts `sageattn_varlen`, or we upstream the
 v0.7.0 fix (in which case send all three modules together).
 
-### Retire the nvcc-13.3 CUDA-toolkit guard once a fixed nvcc ships
-
-`build.sh` carries a `KNOWN_BAD_CUDA=" 13.3 "` blocklist that
-auto-switches the build off nvcc 13.3 (it miscompiles PyTorch >=2.12
-headers via a cudafe++ front-end regression; full A/B in v0.6.6).
-**Trigger:** a 13.3 patch or 13.4+ toolkit whose `nvcc --version` still
-reports a blocklisted version but compiles the same-TU repro clean.
-**Action:** drop the fixed version from `KNOWN_BAD_CUDA`; if the set
-empties, remove the guard block entirely. **Verify:** put the
-previously-broken toolkit first on `PATH` and confirm a `.cu` including
-`<ATen/core/function_schema.h>` compiles (the repro from v0.6.6).
-
 ### Persistent-CTA hybrid for stage-2 attention (highest e2e leverage; v0.7 candidate)
 
 After v0.6.0's production A/B, a downstream consumer characterized
@@ -1054,6 +1042,36 @@ sufficient.
 > and never confirms an H3 claim. `sage_ffn` and the whole FFN line are
 > LTX-motivated throughout.
 
+
+### v0.7.11 -- 2026-09-08  (`clean` stops breaking the venv you were not building for)
+
+`./build.sh clean` now removes only the artifacts for the interpreter it is
+about to rebuild. `./build.sh clean-all` is the old blanket wipe.
+
+**The failure this fixes.** The `.so` files live in the source tree every
+editable install points at, and they are tagged per interpreter
+(`cpython-313`, `cpython-314`), not abi3. Two venvs on different Python
+versions therefore share one checkout by each leaving its own tagged `.so`
+in that directory. The blanket `clean` deleted all of them and the build
+that followed restored exactly one, so the *other* venv began failing at
+`from . import _fused` -- with nothing in that venv having changed, and no
+error at the moment of breakage. It was found by breaking a working venv
+while standing up a second one.
+
+`clean` now reads `EXT_SUFFIX` from the target interpreter and deletes only
+matching files plus that interpreter's `build/lib.*` directory, and refuses
+rather than guesses if it cannot read the suffix. Both branches were
+exercised: a `clean` under one venv leaves the other's kernels importable
+and running, and `clean-all` really does remove every tag (checked by
+observing the sibling disappear, not by reading the code).
+
+Docs corrected in the same pass, since several statements had gone false
+earlier the same day: the CUDA-toolkit paragraphs in `CLAUDE.md` and
+`README.md` described a guard that is now dormant, `CLAUDE.md` advertised a
+build.sh feature set that no longer matches, and the Backlog carried an item
+to retire the nvcc guard that v0.7.9 had already closed -- by a route that
+item did not anticipate, since nvcc was never fixed. Both files also gained
+the C++20 floor and the shared-checkout rule.
 
 ### v0.7.10 -- 2026-09-08  (H3 gets a gated bench, and it gates different things)
 

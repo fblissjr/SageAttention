@@ -119,9 +119,28 @@ venv is currently active so multiple installs don't collide.
 ```bash
 source /path/to/your/venv/bin/activate
 ./build.sh                 # builds for Ampere + Ada (TORCH_CUDA_ARCH_LIST=8.0;8.6;8.9)
-./build.sh clean           # wipe prior .so / build/ artifacts first
+./build.sh clean           # wipe this interpreter's artifacts first, then build
+./build.sh clean-all       # wipe every interpreter's artifacts, then build
 ./build.sh verify          # import-check, no rebuild
 ```
+
+**Requires a C++20 compiler**, because torch does: torch >= 2.14's
+headers `#error` out below `__cplusplus 202002L`, so `setup.py` compiles
+at `-std=c++20`. If every file fails identically inside
+`torch/extension.h`, that is this and not your source.
+
+**Sharing one checkout between venvs works, if you let it.** The
+extension modules are tagged per interpreter, not abi3, so venvs on
+different Python versions coexist by each leaving its own tagged `.so`
+in the source tree. Plain `clean` removes only the tag it is about to
+rebuild, which keeps the others working; `clean-all` removes every tag,
+after which each other venv needs a plain `./build.sh` to get its
+kernels back.
+
+**Any CUDA toolkit your torch accepts will do.** `build.sh` carries a
+guard for toolkits known to miscompile the torch headers of the day; the
+list is currently empty, so the newest `nvcc` on `PATH` is used. Pin a
+different one with `CUDA_HOME=/usr/local/cuda-X.Y`.
 
 Build is 60-90s on an 8-core box with `MAX_JOBS=8` (the script caps
 at 8 because uncapped nvcc parallelism OOMs on the sm89 kernel

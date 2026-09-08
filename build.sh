@@ -10,7 +10,8 @@
 #
 # Usage:
 #   ./build.sh              # build for Ada + Ampere backward compat (default)
-#   ./build.sh clean        # remove prior build artifacts first
+#   ./build.sh clean        # remove THIS venv's artifacts first, then build
+#   ./build.sh clean-all    # remove every interpreter's artifacts, then build
 #   ./build.sh verify       # verify a previous build without rebuilding
 #
 # Env overrides:
@@ -31,19 +32,13 @@ ACTION="${1:-build}"
 
 case "${ACTION}" in
     clean)
-        # WARNING: this wipes sageattention/*.so from the SOURCE TREE, which an
-        # editable install is what every venv points at. Extension modules are
-        # tagged per interpreter (cpython-313 / cpython-314) and are NOT abi3,
-        # so several venvs on different Python versions can share this checkout
-        # only by each having its own tagged .so sitting here side by side.
-        # `clean` deletes all of them and the plain build only restores the tag
-        # for $VIRTUAL_ENV -- every sibling venv then fails at
-        # `from . import _fused`. If you run more than one venv against this
-        # checkout, prefer a plain `./build.sh` per venv and reserve `clean` for
-        # when you genuinely want to rebuild every tag from scratch (then run a
-        # plain build once per venv afterwards).
-        echo "==> Cleaning prior build artifacts"
-        rm -rf build/ dist/ sageattention.egg-info/ sageattention/*.so
+        # Deferred until after the VIRTUAL_ENV check: what gets removed depends
+        # on which interpreter we are about to build for. See do_clean below.
+        DO_CLEAN=1
+        ACTION="build"
+        ;;
+    clean-all)
+        DO_CLEAN=all
         ACTION="build"
         ;;
     verify)
@@ -52,7 +47,7 @@ case "${ACTION}" in
         ;;
     *)
         echo "Unknown action: ${ACTION}" >&2
-        echo "Usage: $0 [build|clean|verify]" >&2
+        echo "Usage: $0 [build|clean|clean-all|verify]" >&2
         exit 1
         ;;
 esac
@@ -71,6 +66,37 @@ if [[ -z "${VIRTUAL_ENV:-}" ]]; then
     echo "Activate the venv sage should install into first, e.g.:" >&2
     echo "    source /path/to/your/venv/bin/activate" >&2
     exit 1
+fi
+
+# --- Clean (scoped to the target interpreter by default) ----------------------
+# The .so files live in the source tree that every editable install points at,
+# and they are tagged per interpreter (cpython-313 / cpython-314), not abi3. So
+# two venvs on different Python versions share this checkout only by each
+# leaving its own tagged .so here side by side. A blanket wipe deletes all of
+# them while the rebuild restores just one, and the other venv then fails at
+# `from . import _fused` with nothing in its own environment having changed.
+# Default `clean` therefore removes only the tag we are about to rebuild.
+# `clean-all` is the old blanket behaviour, for when you do want every tag
+# rebuilt -- run a plain ./build.sh per venv afterwards to restore the others.
+if [[ -n "${DO_CLEAN:-}" ]]; then
+    _EXT_SUFFIX="$("${VIRTUAL_ENV}/bin/python" -c \
+        'import sysconfig; print(sysconfig.get_config_var("EXT_SUFFIX"))' 2>/dev/null)"
+    if [[ "${DO_CLEAN}" == "all" ]]; then
+        echo "==> Cleaning ALL build artifacts (every interpreter tag)"
+        rm -rf build/ dist/ sageattention.egg-info/ sageattention/*.so
+    elif [[ -n "${_EXT_SUFFIX}" ]]; then
+        echo "==> Cleaning build artifacts for ${_EXT_SUFFIX}"
+        rm -rf dist/ sageattention.egg-info/
+        rm -f sageattention/*"${_EXT_SUFFIX}"
+        # Per-interpreter build dir, e.g. build/lib.linux-x86_64-cpython-313.
+        _PYTAG="$("${VIRTUAL_ENV}/bin/python" -c \
+            'import sys; print(f"cpython-{sys.version_info[0]}{sys.version_info[1]}")' 2>/dev/null)"
+        [[ -n "${_PYTAG}" ]] && rm -rf build/*"${_PYTAG}"*
+    else
+        echo "ERROR: could not read EXT_SUFFIX from ${VIRTUAL_ENV}/bin/python;" >&2
+        echo "       refusing to guess which artifacts are safe to delete." >&2
+        exit 1
+    fi
 fi
 
 # --- CUDA toolkit selection ---
