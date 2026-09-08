@@ -31,6 +31,17 @@ ACTION="${1:-build}"
 
 case "${ACTION}" in
     clean)
+        # WARNING: this wipes sageattention/*.so from the SOURCE TREE, which an
+        # editable install is what every venv points at. Extension modules are
+        # tagged per interpreter (cpython-313 / cpython-314) and are NOT abi3,
+        # so several venvs on different Python versions can share this checkout
+        # only by each having its own tagged .so sitting here side by side.
+        # `clean` deletes all of them and the plain build only restores the tag
+        # for $VIRTUAL_ENV -- every sibling venv then fails at
+        # `from . import _fused`. If you run more than one venv against this
+        # checkout, prefer a plain `./build.sh` per venv and reserve `clean` for
+        # when you genuinely want to rebuild every tag from scratch (then run a
+        # plain build once per venv afterwards).
         echo "==> Cleaning prior build artifacts"
         rm -rf build/ dist/ sageattention.egg-info/ sageattention/*.so
         ACTION="build"
