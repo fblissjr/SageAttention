@@ -111,7 +111,36 @@ Recorded: 2026-08-05, while validating the Triton fix at 362 frames.
 Real open TODOs. Each has an explicit trigger-to-act; we don't do these
 speculatively.
 
-### Drop `per_channel_fp8`'s full-size bf16 transpose buffer -- SUPERSEDED 2026-08-06, not withdrawn
+### Drop `per_channel_fp8`'s full-size bf16 transpose buffer -- SUPERSEDED 2026-08-06, but the premise needs re-checking (2026-09-08)
+
+**Read this note before the entry below.** The supersession rests on a
+consumer node slicing attention into head groups. That capability exists,
+is wired, and has its own test on the consumer side -- but it is **not
+enabled in the shipped configuration**: of the consumer's API graphs,
+91 of 92 set `head_chunks` to 1 and exactly one sets 4 (checked
+2026-09-08). Nothing sets it through `transformer_options` either, on
+that side.
+
+The entry's own closing line is "if that A/B goes badly and nobody adopts
+chunking, this item is live again". The A/B was never run, and adoption
+is one graph. So the honest status is neither superseded nor live: the
+deciding measurement does not exist, and the thing that was supposed to
+make this unnecessary is switched off almost everywhere.
+
+**What to do, in order.** Run the chunking A/B in-pipeline before
+touching this kernel item: it is a VRAM-versus-wall-clock dial, the
+figures below say chunking recovers roughly twice what this item would,
+and the cost is a 4x attention-call count on the kernel that dominates
+the render. If chunking wins and gets adopted, this stays superseded for
+a real reason rather than a hypothetical one. If it loses, this item is
+live and the numbers below are the case for it.
+
+Note also the interaction the consumer already documents: chunking keeps
+q/k/v alive across every group, so the caller-side `v` clone becomes a
+flat cost with nothing to recover it. Chunking and cloning are mutually
+exclusive, and doing both is worse than doing neither.
+
+
 
 **Superseded by consumer-side head-group chunking. Do not start this as a
 kernel day.** Everything below about the mechanism is still true, which is
