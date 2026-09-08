@@ -139,9 +139,10 @@ rtol stayed under 0.10 → keep, ship. Anything else → discard, revert.
 
 **The shape (LTX 2.3 video self-attn at production seq).** On LTX 2.3
 video gen, video self-attn accounts for the overwhelming majority of
-attention cost per sampling step (~76% of total attention wall-time
-per a real consumer trace; see CHANGELOG v0.4.1). Per gen, ~25–50
-sampling steps × this row = the real wall-clock the user feels.
+attention cost per sampling step -- the dominant share of attention
+wall-time in a real consumer trace, measured and recorded in CHANGELOG
+v0.4.1. A generation runs tens of sampling steps against this row, which
+is the wall-clock the user feels.
 Cross-attn (kv ≤ 1024) is sub-millisecond per call; image-gen shapes
 (Flux head_dim = 128, Z-Image head_dim = 120) are 1–2 ms. Production
 seq is 22932 (init render) or 23296 (loop iter); the LTX 2.3 video
@@ -258,9 +259,10 @@ and we add a perceptual layer.
   fix is a new bench row + a methodology cycle, not a workload-
   specific kernel.
 - **A `torch.compile` target.** Verified 2026-04-25 on torch 2.11:
-  compile-around-sage produces ~2.8 % rtol drift with no measurable
-  speedup. Revisit when a future torch release makes the spike show
-  bounded rtol AND measurable speedup.
+  compile-around-sage produced rtol drift with no measurable speedup, so
+  the spike rejects it on accuracy rather than on performance. Figures in
+  `docs/torch_compile_spike.md`. Revisit when a future torch release makes
+  the spike show bounded rtol AND measurable speedup.
 
 ## Design choices
 
@@ -349,19 +351,18 @@ The metric and framework reflect the workload mix on this box as of
 
    *v0.5.1 first e2e measurement* on the canonical LTX 2.3 audio-
    loop workload (832×480×497 / 25fps / 8-step distilled): sage's
-   2.66× kernel-row speedup translates to **1.22× end-to-end**,
-   with attention at 8.2% of wall. Pure-attention Amdahl predicts
-   ~1.05×; observed 1.22× is +17 points higher because sage's reach
-   extends beyond the per-call attention rows into FFN-adjacent
+   kernel-row speedup translated to a smaller but real end-to-end win at
+   that workload's low attention share. It beat a pure-attention Amdahl
+   prediction, because sage's reach extends beyond the per-call attention
+   rows into FFN-adjacent
    amortization within the sampler step.
 
    *v0.6 sage_ffn e2e walk-back* on a two-sampler LTX FML2V
-   workflow (CHANGELOG v0.6.0): synthetic kernel-bench projected
-   1.26-1.36× vs torch fp8-dequant reference, but the in-pipeline
-   A/B came back **+1.79% e2e SLOWER** (+20% per-call at stage-2).
-   Root cause was L2 cache contention with neighboring attention
-   modules + cumulative kernel-launch overhead at LTX's ~1000-FFN-
-   calls/render count. **This is the cost of running synthetic-
+   workflow (CHANGELOG v0.6.0): synthetic kernel-bench projected a win
+   against the torch fp8-dequant reference, but the in-pipeline A/B came
+   back **slower end to end**, and worse per call at stage-2. Root cause
+   was L2 cache contention with neighbouring attention modules plus
+   cumulative kernel-launch overhead at LTX's per-render FFN call count. **This is the cost of running synthetic-
    first / in-pipeline-validate-later** for kernel work with
    structural risk that synthetic bench specifically can't measure
    (L2 contention, dispatch overhead, fragmentation, sustained
@@ -375,10 +376,10 @@ The metric and framework reflect the workload mix on this box as of
    the consumer-side integration chain fully closed (six bugs across
    two A/B cycles) and sage_ffn dispatching end-to-end, the v0.6
    synthetic-vs-production gap was measured at the per-stage kernel
-   boundary: sage_ffn is 22% slower at stage-1 (T=10780) and 5%
-   slower at stage-2 (T=42240) vs production stock fp8, despite
-   synthetic isolation showing 1.39x / 1.60x sage advantage at the
-   same shapes. **Production has the sign flipped.** The gap is not
+   boundary: `sage_ffn` is slower at both stages against production stock
+   fp8, despite synthetic isolation showing a clear sage advantage at the
+   same shapes. **Production has the sign flipped.** Per-stage figures in
+   CHANGELOG v0.6.0. The gap is not
    framework overhead -- it sits at the kernel boundary itself. Two
    open hypotheses (CHANGELOG Decision log): stock comparand
    identity (synthetic vs `torch._scaled_mm`, production vs

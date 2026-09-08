@@ -71,16 +71,19 @@ rather than "validated."
 
   What it saves is configuration-dependent, and the configuration DiT
   blocks actually use is the one where it saves nothing. Peak per call at
-  MiniMax H3's fl2va shape: -858 MiB with separate allocations and
-  `smooth_k=False`, -287 MiB at the shipped `smooth_k=True`, and **0
-  against a fused QKV buffer**, because releasing q and k frees nothing
-  while v still references the same allocation. An earlier "~435 MiB in
-  the fused case" figure was wrong and is retracted; see CHANGELOG v0.7.3.
+  MiniMax H3's fl2va shape: a large saving with separate allocations and
+  `smooth_k=False`, a smaller one at the shipped `smooth_k=True`, and
+  **nothing at all against a fused QKV buffer**, because releasing q and k
+  frees nothing while v still references the same allocation. An earlier
+  figure for the fused case was wrong and is retracted; values, conditions
+  and the retraction are in CHANGELOG v0.7.3.
 
   A caller gets it back by cloning v before handing over, which gives v
   its own storage and converts the fused case into the separate one for
-  the price of a third of the buffer: -286 MiB at that shape, against a
-  flat +572 MiB cost if the release does not happen. Gate that clone on
+  the price of a third of the buffer -- against a flat cost of twice that
+  if the release does not happen, so the halves are asymmetric and a
+  half-applied version loses memory. Values in CHANGELOG v0.7.4. Gate that
+  clone on
   **`sageattn_consume_prefers_cloned_v(device)`** (v0.7.4) rather than on
   an arch check of your own, so a future change to when the release pays
   reaches you on upgrade instead of drifting silently.
@@ -93,9 +96,9 @@ rather than "validated."
   two-kernel fp8-native fused MLP for DiT FFN blocks with per-tensor
   fp8 (E4M3FN) weights. Targets LTX 2.3 distilled. **Ships as a
   completeness primitive, not a perf win**: synthetic-bench shows
-  1.26-1.36x vs torch's fp8-dequant path, but a two-sampler LTX
-  production A/B came back +1.79% e2e slower (+20% at stage-2
-  per-call) -- the synthetic-vs-in-pipeline gap the perf-research
+  faster than torch's fp8-dequant path, but a two-sampler LTX production
+  A/B came back slower end to end, and worse per call at stage-2 --
+  figures in CHANGELOG v0.6.0. This is the synthetic-vs-in-pipeline gap the perf-research
   framework calls Cell C (defined in
   `docs/perf_research_framework.md`). Available for users who
   specifically need fp8-native fused MLP on sm89; no other library
@@ -183,9 +186,17 @@ print(get_last_dispatched_kernel())  # 'fp8_cuda++', 'fp16_triton', etc.
 
 ## What we've measured
 
-Setup: RTX 4090, CUDA 13.0, torch 2.11, bf16 inputs. Speed = median ms
-over 3 timed runs after 1 warmup. `MATH` SDPA backend OOMs at LTX
-self-attn scale, so the accuracy reference is `SDPBackend.EFFICIENT_ATTENTION`.
+All measurements below are on an RTX 4090 (sm89) with bf16 inputs. Speed is
+a median over timed runs after a warmup; the accuracy reference is
+`SDPBackend.EFFICIENT_ATTENTION`, because the `MATH` backend OOMs at LTX
+self-attn scale.
+
+**Conditions travel with each table, not with this section.** These results
+span many months and several toolchains, so a single setup line at the top
+would be wrong for most of them -- it said "torch 2.11" until 2026-09-08,
+long after that stopped being true anywhere. Each table names its own date
+and stack; `internal/bench_env_<date>.txt` holds the full snapshot for runs
+made through `tests/run_all.sh`.
 
 ### Unmasked self-attn
 
@@ -204,19 +215,19 @@ spikes. A one-off H3 self-attn sweep is recorded in `CLAUDE.md`.
 | Flux-class self-attn (4096x4096, h=24, d=128) |  0.64 ms |    1.31 ms  |  2.05x  |
 | Z-Image-Turbo S3-DiT (4608x4608, h=32, d=120) |  1.32 ms |    2.23 ms  |  1.69x  |
 
-Quantization-induced rtol is ~0.097 on these shapes (well below the
-0.10 line we treat as the acceptable ceiling for DiT generation
-work). In practice this is below VAE noise on the image/video gen
-workloads we've tested; we haven't run task-level quality benchmarks.
+Quantization-induced rtol on these shapes sits under the 0.10 line we treat
+as the ceiling for DiT generation work; the per-shape values are in the
+bench's own output and in `tests/regression_baselines.json`. In our hands
+that has been below VAE noise on the image and video workloads tested, but
+we have run no task-level quality benchmarks.
 
-E2e ratio for the iclora workflow (downstream consumer A/B
-2026-05-07, attention share ~42% of CUDA kernel time): measured
-1.41x wall ratio, matches pure-Amdahl prediction within 1.4%. For
-the FML2V multi-guide workflow: stage-2 attn1 is the single
-heaviest sub-module and gives a materially larger e2e lever than
-the FFN-side primitive. The canonical breakdown + FFN-share triplet
-(three distinct readings depending on the question being asked) is
-in `docs/ltx_workload_profile.md`.
+An end-to-end A/B on a downstream consumer's iclora workflow (2026-05-07)
+measured a wall-clock ratio consistent with pure Amdahl at that workload's
+attention share -- figures in the CHANGELOG entry for that date. For the
+FML2V multi-guide workflow, stage-2 `attn1` is the single heaviest
+sub-module and a materially larger lever than the FFN-side primitive; the
+canonical breakdown and the FFN-share triplet are in
+`docs/ltx_workload_profile.md`, which is where those numbers live.
 
 ### MiniMax H3 (v0.7) -- the cleanest e2e result we have
 
@@ -234,14 +245,20 @@ warmup discarded, arms alternating on a shared seed:
 | 73 frames | 1.70x | 1.62x | 152s -> 94s |
 | 124 frames | **1.91x** | **1.83x** | 360s -> 197s |
 
-Paired runs agreed within 0.3s. **The speedup grows with clip length**
-(attention is quadratic in sequence, the rest is not) while per-call
+Paired runs agreed closely. **The speedup grows with clip length**
+(attention is quadratic in sequence length, the rest is not) while per-call
 accuracy stays flat, so longer clips are strictly the better case.
-Profiling one forward: attention 47.5%, int8 linears 40.7%, weight
-streaming only 4.5% -- so this is compute-bound, not PCIe-bound, and
-attention is still the largest single cost even after the win.
 
-Peak VRAM ~20.6 GB of 24 GB at length 73. Consumer node lives separately
+A forward-pass profile puts attention as the largest single cost even after
+the win, with the INT8 linears second and weight streaming a small
+remainder -- so this workload is compute-bound rather than PCIe-bound. That
+one-off reading has since been superseded by
+`docs/h3_workload_profile.md`, which carries per-sub-module time and peak
+memory at two clip lengths on the path that ships, and is the place to
+quote from.
+
+Peak VRAM at the shorter length leaves little headroom on a 24 GB card.
+Consumer node lives separately
 in [ComfyUI-h3-explorations](https://github.com/fblissjr/ComfyUI-h3-explorations),
 per the "sage-fork stays primitive" rule. Its
 [SOLATTN.md](https://github.com/fblissjr/ComfyUI-h3-explorations/blob/main/SOLATTN.md)
@@ -250,35 +267,34 @@ carries the sage + Sol-Attn stacking experiments.
 ### An accuracy calibration worth knowing
 
 Every rtol figure in this README comes from a synthetic bench over
-`torch.randn` inputs. On **real captured activations** the same fp8++
-kernel measures **0.026, roughly 4x lower**, and the fp8++-to-fp16 gap
-narrows from 2.6x to 1.3x. Real attention has structure -- concentrated
-softmax, correlated keys -- that quantization handles far better than
-iid gaussian noise.
+`torch.randn` inputs. On **real captured activations the same fp8++ kernel
+measures several times lower**, and the fp8++-to-fp16 gap narrows
+substantially. Real attention has structure -- concentrated softmax,
+correlated keys -- that quantization handles far better than iid gaussian
+noise. The measured pair is in `docs/h3_kernel_measurements.md`.
 
-So the synthetic numbers below are a **pessimistic bound, not an
-estimate**. Do not read 0.098 as a quality budget. It also means a
-synthetic sweep cannot answer questions about input *distribution*: our
-first `smooth_k` experiment reported "no effect" on `torch.randn`, which
-has zero mean by construction and therefore no channel offset for
-`smooth_k` to remove. On real K the offset is substantial
-(|mean|/std 0.68) and it still does not help, most likely because
+So every synthetic rtol here is a **pessimistic bound, not an estimate**,
+and none of them is a quality budget. It also means a synthetic sweep
+cannot answer questions about input *distribution*: our first `smooth_k`
+experiment reported "no effect" on `torch.randn`, which has zero mean by
+construction and so no channel offset for `smooth_k` to remove. On real K
+the offset is substantial and it still does not help, most likely because
 `per_thread` quantization granularity already handles it.
 
 ### Masked self-attn (post-v0.5.5)
 
 Before v0.5.5, the sm89 CUDA kernels silently dropped `attn_mask` --
 the C++ `MaskMode` enum only had `{kNone, kCausal}` and the pybind
-layer never wired the parameter through. Masked calls produced
-rtol that scaled with `1 / seq_kv` (the silent-drop fingerprint:
-0.94 at kv=64, 0.13 at kv=1024). The Triton kernel was the only
-mask-correct path.
+layer never wired the parameter through. Masked calls produced rtol that
+scaled with `1 / seq_kv` -- the silent-drop fingerprint, large at short kv
+and shrinking as kv grows. The Triton kernel was the only mask-correct
+path.
 
 v0.5.5 added native general-mask support on the sm89 fp8++ kernel
 (`MaskMode::kGeneral` + an `apply_general_mask` helper in
-`csrc/qattn/attn_utils.cuh`). Masked rtol on the same kv sweep is
-now ~0.09 across the range -- matching the fp8++ unmasked-vs-Triton
-floor. The dispatcher routes masked sm89+CUDA>=12.8 calls to the
+`csrc/qattn/attn_utils.cuh`). Masked rtol on the same kv sweep is now flat
+across the range and matches the fp8++ unmasked-vs-Triton floor, rather
+than scaling with kv. The dispatcher routes masked sm89+CUDA>=12.8 calls to the
 new path automatically; other archs still use the Triton fallback.
 
 ### Preliminary in-pipeline observation
@@ -293,11 +309,11 @@ after additional repetitions:
 | Triton masked fallback + FFN chunking ON | N=1 success, N=2 OOM (non-deterministic) |
 | fp8_cuda++ masked path + FFN chunking OFF | deterministic OOM at stage-2 FFN GELU |
 
-Both Triton OOMs hit `AdaLNSingle.linear` (downstream of attention) --
-727 MiB requested, ~16 MiB free, after 48 masked dispatches. The
-chunking-off fp8++ OOM hits the FFN GELU projection at the
-multi-guide expanded shape (proj output `(1, 44880, 16384)` bf16 ≈
-1.47 GiB).
+Both Triton OOMs hit `AdaLNSingle.linear`, downstream of attention, with a
+sub-gigabyte request against almost no free memory after several dozen
+masked dispatches. The chunking-off fp8++ OOM hits a different wall: the
+FFN GELU projection at the multi-guide expanded shape. Request sizes and
+free-memory readings are in the CHANGELOG entry for that A/B.
 
 **Honest reading**: at this workload scale on 24 GiB, the
 `LTXVChunkFeedForward` FFN-chunking node is doing the heavy lifting
@@ -324,23 +340,24 @@ Independent reproduction welcome.
 two Triton kernels (`Linear -> GELU(tanh)` then `Linear`) computing
 in fp8 against per-tensor-fp8 weights. The wedge is qualitative:
 torch's `F.linear` against fp8 weights dequants to bf16 before the
-matmul (paying 2x weight bandwidth and using bf16 tensor cores at
-~330 TFLOPS); `sage_ffn` loads fp8 directly and uses sm89 fp8
-tensor cores at ~660 TFLOPS. No other library ships an fp8-native
+matmul, paying double the weight bandwidth and landing on bf16 tensor
+cores; `sage_ffn` loads fp8 directly onto sm89's fp8 tensor cores, which
+have twice the peak throughput. No other library ships an fp8-native
 fused MLP for these consumer-app DiT shapes on sm89 (FA's
 `fused_mlp_func` is bf16/fp16 only).
 
-LTX 2.3 distilled FFN shapes (hidden=4096, inner=16384), bias-inclusive
-(matches the LTX 2.3 distilled checkpoint), measured on RTX 4090,
-CUDA 13.0, torch 2.12.0+cu130, triton 3.7.0 -- **synthetic standalone
-bench, not end-to-end ComfyUI rendering**:
+LTX 2.3 distilled FFN shapes (hidden=4096, inner=16384), bias-inclusive to
+match that checkpoint. **Synthetic standalone bench, not end-to-end
+rendering.** Conditions: RTX 4090, CUDA 13.0, torch 2.12.0+cu130, triton
+3.7.0 -- a stack this repo no longer runs, so treat the absolute times as
+historical and the ratio as the finding:
 
 | shape | sage_ffn | torch ref (fp8-dequant) | speedup | mean_rtol |
 |---|---:|---:|---:|---:|
 | stage-1 (T=10780) | 13.3 ms | 18.1 ms | **1.36x** | 0.091 |
 | stage-2 (T=44880 multi-guide) | 59.8 ms | 75.3 ms | **1.26x** | 0.091 |
 
-mean_rtol is well under the 0.10 budget. The reference is
+mean_rtol is under the 0.10 budget. The reference is
 `F.linear(F.gelu(F.linear(x, w1_bf16), approximate="tanh"), w2_bf16)`
 with weights dequantized once outside the timing loop, so this is
 torch's *best-case* fp8-weight path, not its naive one.
@@ -361,24 +378,24 @@ interleaved baseline/treatment/baseline/treatment on a 4090 under
 | ff @ T=42240 med ms/call | 48.77 | 58.58 | **+20.1% slower** |
 
 Same workflow / prompt / seed across both sides; interleaving
-controls for time-varying noise; non-FFN sub-modules at 1.00x
-ratio confirm the patching surface is clean. Per-call FFN times
+controls for time-varying noise; non-FFN sub-modules show an unchanged
+ratio, which confirms the patching surface is clean. Per-call FFN times
 match between cold-autotune and warm-autotune treatments, so
 autotune amortization is not the explanation.
 
-Why the synthetic 1.26-1.36x didn't translate:
+Why the synthetic win did not translate:
 
-1. **L2 cache contention with neighboring sub-modules.** Synthetic
-   bench ran FFN alone with warm L2. Production runs `attn1` (~107
-   ms at T=42240) immediately before `ff` at stage-2; the attention
-   pass evicts FFN's L2 residency. The X-tile-lives-in-L2
-   assumption breaks when L2 is hostile; cold-L2 FFN is
-   bandwidth-bound and loses the fp8-vs-bf16 advantage. Worse at
-   stage-2 (4x working set) matches the regression shape.
-2. **Cumulative kernel-launch overhead at LTX call count.** LTX
-   2.3 fires ~1056 ff calls per render across transformer blocks.
-   sage_ffn is two kernel launches per call; torch reference is
-   one cuBLASLt call per matmul.
+1. **L2 cache contention with neighbouring sub-modules.** The synthetic
+   bench ran FFN alone with warm L2. Production runs `attn1` immediately
+   before `ff` at stage-2, and the attention pass evicts FFN's L2
+   residency. The assumption that the X tile lives in L2 breaks when L2 is
+   hostile; cold-L2 FFN is bandwidth-bound and loses the fp8-versus-bf16
+   advantage. The effect is worse at stage-2, whose working set is several
+   times larger, and that matches the shape of the regression.
+2. **Cumulative kernel-launch overhead at LTX's call count.** An LTX 2.3
+   render fires on the order of a thousand `ff` calls across transformer
+   blocks. `sage_ffn` is two kernel launches per call where the torch
+   reference is one cuBLASLt call per matmul.
 
 The v0.5.5 precedent played out a second time -- synthetic kernel-
 bench projects a wedge, in-pipeline A/B reveals production
@@ -397,9 +414,9 @@ Design notes:
   bf16) need consumer-side dispatch -- `sage_ffn` only handles
   fp8-weight blocks; the bf16 bookend blocks fall through to
   `F.linear` in the caller.
-- First call at a new shape pays ~10-15s Triton autotune-search per
-  kernel (~30s total across both kernels at the two LTX shapes);
-  subsequent calls hit the on-disk cache. Configs are hardcoded
+- First call at a new shape pays a Triton autotune search per kernel, tens
+  of seconds across both kernels at the two LTX shapes; subsequent calls
+  hit the on-disk cache. Configs are hardcoded
   winners from a broader sweep so that first-render cost stays
   bounded.
 - v0.6.1 candidates for closing the production gap: persistent-CTA
@@ -447,7 +464,7 @@ Summary of the things worth knowing:
   loop makes the analog non-trivial. Currently relevant only for
   workloads we haven't measured.
 - **Persistent-CTA hybrid for stage-2 attention** (highest e2e lever,
-  ~15% wall-time ceiling on LTX multi-guide workloads) and **for
+  a modest wall-time ceiling on LTX multi-guide workloads) and **for
   sage_ffn** (validates the technique at lower risk). Both deferred;
   see CHANGELOG Backlog for triggers. CUTLASS-based fp8 matmul backend
   was queued and is now demoted to "skip per workload-profile analysis"
@@ -462,13 +479,15 @@ Summary of the things worth knowing:
 
 You get:
 
-- 2-2.7x per-call speedup over torch's flash backend on sm89 self-attn
+- A per-call speedup over torch's flash backend on sm89 self-attn
   at the DiT-class shapes we validated (head_dim ∈ {64, 120, 128}).
   Synthetic kernel-bench measurement; e2e wall-time wedge depends on
-  the workload's attention share. Measured: 1.41x e2e on the iclora
-  workflow at ~42% attention share, matches pure-Amdahl within 1.4%.
+  the workload's attention share. One downstream A/B on the iclora
+  workflow matched a pure-Amdahl prediction from that workload's measured
+  attention share; figures in the CHANGELOG entry for 2026-05-07.
 - A faster cross-attn path via `sageattn_qk_int8_pv_fp16_triton`
-  (~2.8x over `torch_cudnn` at LTX cross-attn shapes). Same caveat:
+  (a larger margin over `torch_cudnn` at LTX cross-attn shapes). Same
+  caveat:
   per-call, not e2e.
 - Native mask support on the sm89 fp8++ CUDA path -- masked calls
   run at fp8++ speed instead of paying the Triton fallback
@@ -476,7 +495,8 @@ You get:
 - An fp8-native fused MLP primitive (`sage_ffn`, v0.6) for LTX
   2.3-class FFN blocks. The only fp8-native fused MLP available
   for these workloads on sm89. **Note**: synthetic-bench shows
-  1.26-1.36x but a two-sampler LTX production A/B came back
+  faster in a synthetic bench but a two-sampler LTX production A/B came
+  back
   net slower; ships as a completeness primitive only. See
   "What we've measured" for detail.
 
