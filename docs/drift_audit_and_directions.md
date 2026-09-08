@@ -274,9 +274,38 @@ same session was never scored, only the pairwise one, and the export is
 marked partial. Enough to say there is no gross defect; not enough to
 rule out a small quality cost.
 
-**And the build under test was not this one -- but the source was.**
-Two different axes, and it is worth keeping them apart because a result
-on one gets quoted as covering the other.
+**And the build under test was not this one -- but it computes the same
+thing. CLOSED 2026-09-08.** Three axes, all now covered:
+
+*Source:* unchanged. `git log` over `csrc/` and `sageattention/` since
+the grading returns only a version export and the deletion of a helper
+that was never on the attention path.
+
+*Compiler:* bit-identical. Two toolkits, same source and standard.
+
+*Language standard and framework headers:* **bit-identical, measured.**
+The old configuration was rebuilt -- the older framework release in a
+scratch environment, the older standard forced through the build's own
+env override -- and its kernel output compared against the current build
+across both fp8 PV-accum variants, the alternate kernel and the masked
+path. All eight cases identical to the bit.
+
+Two things made that experiment trustworthy rather than merely green.
+The rebuild ran in a detached worktree, because building the old
+configuration in place would have overwritten the shared extension the
+working environment loads. And the standard override was **verified to
+take effect** rather than assumed: the build output is quiet, so
+`__cplusplus` was checked directly under the exact flag order the build
+produces. Had the override been silently ignored, the comparison would
+have been two builds at the same standard, agreeing for an uninteresting
+reason.
+
+So the grading evidence transfers to the current build in full, and no
+re-render is needed to license it. The original note is kept below,
+because the distinction it drew is the reason the right experiment got
+run instead of a ladder.
+
+**The two axes, as originally written.**
 
 *Source axis, verified:* no attention kernel source changed between
 those renders and now. `git log` over `csrc/` and `sageattention/` since
