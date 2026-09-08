@@ -328,13 +328,50 @@ mismatch warning; the dig is whether anything *fails* on mismatch, or
 whether a warning at startup is enough for a build that changes kernel
 behaviour.
 
-**D4. The approximate-attention override's share is still the missing
-number.** Our attention win multiplies against the dense share, not
-against the render. The mechanism is read from source and trustworthy;
-the share is not, and is scheduler- and window-dependent. The
-instrumentation exists on both sides -- our dispatch counters, their
-tracing. The dig is one instrumented real render, not a synthetic study,
-and it gates how any H3 attention work should be ranked.
+**D4. Attribution on the packed audio-video model: sequencing agreed
+with the consumer-side session, 2026-09-08.** The original framing here
+was "measure the override's dense share". That is the wrong first move
+and the consumer session corrected it, so the corrected version:
+
+*Ask what this fork produces before asking how much of the render was
+this fork.* There is a settled bench graph that wires our attention node
+and no approximate-attention override -- the sage-alone arm, and the one
+the override work was measured against. Rendering that answers the
+question directly: if its output is fine, the problem is upstream of us
+and the share is irrelevant; if it is not, it is ours and the share is
+still irrelevant. The share measurement explains a result; it does not
+produce one.
+
+*Do not start on the shipped graph.* Its composition is
+length-dependent: the override declines every call below a token
+threshold, and a short clip can sit just under it, so the same graph is
+a different experiment at different clip lengths. That is a bad place to
+begin an attribution.
+
+*The instrumentation is not yet trustworthy, and this is the load-bearing
+part.* The consumer's tracer does have per-call outcome attribution --
+distinct values separating this fork's kernels from each fallback flavour
+and from override delegation -- reachable at several exits. **No control
+forces those outcomes.** They are correct-by-construction, with nothing
+that would notice if one stopped landing where it should. A share
+computed from an unforced attribution field is a plausible number, not
+evidence, and it would be used to decide whether kernel work on this
+model is worth doing at all. Closing that -- driving each outcome and
+confirming the field follows -- is the prerequisite, and it is the same
+defect class as everything in Findings A.
+
+*One label is known wrong already:* calls are tagged with a fixed module
+name although the patched method is shared by two block types, so a
+shorter secondary workload arrives labelled as the primary one. It is
+separable by sequence length, which is part of the record key, but not
+by the field named for it. Anyone picking bench shapes from that trace
+should split on length and ignore the label. This fork does not need to:
+its own gated bench derives shapes from the node's geometry rules.
+
+*Nothing currently joins the consumer's call counts to this fork's
+dispatch counters.* Writing that join is a first, not a second
+implementation -- but it belongs on the consumer side, since the
+denominator does.
 
 **D5. The bench comparand for the fused-MLP primitive is now one version
 behind.** A newer scaled-matmul entry point exists in the installed
