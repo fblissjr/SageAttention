@@ -54,7 +54,26 @@ What produced these findings, so it can be repeated:
 4. **Check the caller you are about to accuse.** See A1: the first
    version of that finding was wrong in a way that would have sent
    someone to "fix" correct code.
-5. **A mutation can mask itself.** Found while proving a new check could
+5. **Name the axis a result covers, before quoting it.** The most
+   frequent error in this audit was not a wrong measurement. It was a
+   correct measurement on one axis, quietly promoted to cover another.
+   Three instances in a single day, all caught by someone else asking:
+
+   - two compilers producing identical output became "the rebuild is
+     safe", when the rebuild also changed the language standard and the
+     framework headers. Closing it needed the old configuration actually
+     rebuilt, which is a different experiment;
+   - one caller no longer performing an optimisation became "no caller
+     performs it", when the caller that owns the relevant call site
+     still did;
+   - an identifier agreeing across two records became corroboration,
+     when that identifier was a constant and could not have disagreed.
+
+   The tell is a sentence where the evidence and the claim quantify over
+   different things. Write the axis into the claim -- "for this source,
+   across these two compilers" -- and the promotion becomes visible
+   instead of natural.
+6. **A mutation can mask itself.** Found while proving a new check could
    fail: the check compares a value against the checkout's own VCS
    state, and the obvious way to break it -- editing the source file --
    makes a tracked file modified, which moves *both* sides of the
@@ -161,6 +180,38 @@ copy our internal arch list.
 
 **B6. Both tracked environments import and run.** Including a newer
 interpreter, where every third-party node loaded cleanly.
+
+## The one that reorders the others
+
+**Check the premise that ranks the work before doing the ranked work.**
+
+This audit spent its first hours inside a frame: promoting a bench,
+tightening a gate, chasing a memory line. All defensible, none wasted.
+Then two cheap questions -- asked late, and by the owner rather than by
+the work -- moved the frame underneath all of it:
+
+- *Is attention really almost all of an H3 render?* No. A bound derived
+  from an A/B that already existed puts it at **at least a third** of a
+  render in the configuration people actually run, against the "almost
+  all of it" the docs asserted. That is the Amdahl denominator for every
+  attention bet here, and it was wrong by a factor that changes
+  decisions.
+- *Does our memory work reach the allocation that matters?* No. The seam
+  we patch receives tensors that are already built, so the whole line
+  recovers hundreds of MiB downstream of a producer-side approach that
+  saves gigabytes.
+
+Neither question needed new measurement -- the first was an arithmetic
+bound over numbers already on disk, the second was reading where a call
+site sits. Both cost minutes. Both would have reordered the queue if
+asked first.
+
+So: before spending a day on the highest-ranked item, spend twenty
+minutes on the claim that put it top. Ranking premises are exactly the
+kind of statement this document is about -- load-bearing, written once,
+never re-evaluated -- and being wrong about one is more expensive than
+being wrong about any single measurement, because it misdirects
+everything downstream rather than one number.
 
 ## Recommendations
 
