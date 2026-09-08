@@ -583,6 +583,37 @@ spend on a "kernel-side gap" finding.
 Investigations that closed without action. Recorded so we don't
 re-derive them. Each entry has an explicit reopen-trigger.
 
+### Caller-side `v` clone for H3 has disappeared upstream; `sageattn_consume` now saves nothing there
+
+`sageattn_consume` (v0.7.0) and `sageattn_consume_prefers_cloned_v`
+(v0.7.4) were built around a caller that gives `v` its own storage, so
+releasing q and k frees the fused QKV buffer. ComfyUI did that as of
+2026-08-11. **Re-read 2026-09-08: it does not any more.**
+`comfy/ldm/minimax/model.py` builds q/k/v as
+`self.qkv_proj(x).split(...)` -- three views of one buffer -- and wraps
+each in `AttentionTensorContainer`, which stores the tensor without
+copying. No `.clone()` on the v path.
+
+That is precisely the fused-views arrangement v0.7.3 measured at **0 MiB
+either way**. Nothing is broken: the consume path stays correct and
+bit-identical. It is buying nothing on the shipped H3 graph, and the
+predicate returning True is advice no caller currently takes.
+
+**Trigger to act:** wanting that per-call headroom back on H3, which is
+memory-tight. It is caller-side and needs no kernel change -- an
+attention patch that owns the call site can clone `v` when the predicate
+says True. **Verify before shipping it:** the two halves are asymmetric
+(cloning without consuming is a flat +572 MiB at fl2va; consuming at
+`smooth_k=True` hands the clone straight back), so a half-applied
+version costs memory instead of saving it. Measure at the shape in
+question rather than assuming the v0.7.4 figure transfers.
+
+**Why this was missed:** nothing failed. The predicate still answers,
+the kernels still run, the output is unchanged -- only the saving
+silently went to zero. This is the `docs/moving_targets.md` case:
+a finding about a fast-moving dependency needs a re-check condition
+recorded with it, and this one had a date but no re-check.
+
 ### `torch.library.opcheck` cannot grade our sm89 ops, and the failure looks like our bug
 
 **Closed 2026-09-08.** After the move to torch 2.14 the question was

@@ -16,7 +16,8 @@ L1 routing index. Detailed material lives in `docs/` (committed) and
 > however similar the mechanism looks. The two differ in ways that change
 > results: H3 has exactly one attention call site over a packed
 > `[text | refs | audio | video]` sequence with `mask=None` hardcoded
-> (`comfy/ldm/minimax/model.py:172`) and no cross-attention at all, where
+> (`comfy/ldm/minimax/model.py:199`, re-checked 2026-09-08) and no
+> cross-attention at all, where
 > LTX has masked cross-attn as a headline shape. **Label the model on
 > every number.** See Conventions.
 
@@ -797,13 +798,33 @@ Sage exposes three surfaces to downstream consumers:
    -286 MiB per call at fl2va, for one third of the buffer. Both halves
    are load-bearing and asymmetric -- cloning without consuming is a
    flat +572 MiB, and consuming at `smooth_k=True` hands the clone
-   straight back (+286 the wrong way). ComfyUI does this in
-   `comfy/ldm/minimax/model.py` as of 2026-08-11. Consumers gate on the
-   predicate rather than on an arch check so that a) they don't copy
-   `core._EARLY_RELEASE_ARCHS` into their node where it drifts silently,
-   and b) they inherit the flip to False if the transpose-buffer backlog
-   item ever lands, which retires the clone rather than stacking with
-   it. Numbers + reasoning in CHANGELOG v0.7.4.
+   straight back (+286 the wrong way).
+
+   **ComfyUI did this as of 2026-08-11 and does NOT any more -- re-read
+   2026-09-08.** `comfy/ldm/minimax/model.py` now builds q/k/v as
+   `self.qkv_proj(x).split(...)`, i.e. three views of one fused buffer,
+   and wraps each in `AttentionTensorContainer`, which stores the tensor
+   and does not copy it. There is no `.clone()` on the v path. So the
+   shipped H3 graph is exactly the fused-views case measured at **0 MiB
+   saved either way**: releasing q and k frees nothing while v holds the
+   same allocation. `sageattn_consume` is still correct and still
+   bit-identical there -- it is simply buying nothing, and
+   `sageattn_consume_prefers_cloned_v` returning True is advice no
+   caller is currently taking.
+
+   Recovering it is caller-side and does not need a kernel change: an
+   attention patch that owns the call site can clone v itself when the
+   predicate says True. Do not assume the saving without measuring at
+   the shape in question -- both halves are asymmetric, and the
+   +572/-286 figures above are the reason a half-applied version costs
+   memory rather than saving it.
+
+   Consumers gate on the predicate rather than on an arch check so that
+   a) they don't copy `core._EARLY_RELEASE_ARCHS` into their node where
+   it drifts silently, and b) they inherit the flip to False if the
+   transpose-buffer backlog item ever lands, which retires the clone
+   rather than stacking with it. Numbers + reasoning in CHANGELOG
+   v0.7.4.
 
 **`attn_mask` must stay a named parameter of `sageattn()`**, not a
 `**kwargs` entry. ComfyUI gates masked calls on `"attn_mask" in
