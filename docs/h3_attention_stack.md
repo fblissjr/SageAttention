@@ -11,6 +11,43 @@ this fork's accuracy against an approximate kernel's published figure.**
 The referent rule at the bottom is the one that has caused the most
 confusion.
 
+## The attention share, and why it is weaker evidence than it looks
+
+**Checked 2026-09-08. The only measured H3 attention share in this repo
+is 76% of the step, and it was taken at S=109,126 -- a 362-frame packed
+length, which is past H3's 15.0 s ceiling. 345 frames is the largest
+legal count, so that measurement is at a shape nobody can render**
+(`docs/minimax_h3_av_sampling.md`).
+
+Three consequences, and the third is the one that matters:
+
+1. **It is not 90%.** The figure repeated in conversation is higher than
+   the figure on record. Quote 76%, with its S.
+2. **It is at an illegal shape.** Not wrong as a kernel measurement --
+   the entry is careful to say read it as a measurement at that S -- but
+   it is not a statement about a render anyone performs.
+3. **It is biased upward for real renders, by construction.** Attention
+   is O(S^2) where most of the rest of a step is roughly O(S), so the
+   attention share *rises* with sequence length. The measured share sits
+   at an S well above the common case: a 124-frame fl2va render is
+   S=41,822, under half that length. So the share at the shapes actually
+   rendered should be **lower than 76%**, not higher. That direction is
+   reasoning from the complexity, not a measurement -- nobody has
+   profiled a legal H3 shape.
+
+**What this does to ranking.** "Attention is almost all of it, so
+attention work is the only work worth doing" is the argument that ranks
+everything on this model, and it rests on one number, at an unrenderable
+length, that is smaller than the version in circulation and points the
+wrong way for real shapes. It may well survive a proper profile. It has
+not had one.
+
+**The gap:** LTX has `docs/ltx_workload_profile.md` -- sub-module shares
+from a real render, the canonical input for ranking a perf bet. H3 has no
+equivalent. That is the highest-value missing measurement on this model,
+because it is upstream of every decision about what to optimise, and it
+is a profiling run rather than a kernel day.
+
 ## Why H3 is not LTX, and why the benches split
 
 Kept because it is how you read anything in this repo dated before
@@ -28,7 +65,7 @@ the older record.
   | attention sites | self-attn + **masked cross-attn** (headline shape) | **one** call site, no cross-attn |
   | mask | load-bearing (drove the v0.5.5 kernel) | `mask=None` hardcoded; unreachable |
   | sequence | separate q/kv streams | one packed `[text\|refs\|audio\|video]` |
-  | **bottleneck** | mixed -- FFN is a real share (`docs/ltx_workload_profile.md`), attention is one part | **attention is almost all of it** |
+  | **bottleneck** | mixed -- FFN is a real share (`docs/ltx_workload_profile.md`), attention is one part | attention dominates, but see the share note below -- "almost all of it" overstates what was measured |
 
   **The bottlenecks differ, so the work that pays differs.** Everything in
   the FFN line -- `sage_ffn`, the GeGLU extension, the persistent-CTA
