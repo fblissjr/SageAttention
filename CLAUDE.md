@@ -21,12 +21,15 @@ the bottom; `git log -p CLAUDE.md` shows exactly what moved where.
   load-bearing metric. Re-blocking is one `exit` away in `run_all.sh`.
 - **The v0.5.5 native-mask kernel is zero priority** -- LTX-motivated,
   and H3 never passes a mask.
-- **`sage_ffn` was parked on a premise the profile falsifies.** H3's MLP
-  is a *larger* share of a DiT block than its attention, on time and on
-  peak memory both (`docs/h3_workload_profile.md`). It is still not
-  usable here as it stands -- it targets a GELU MLP where H3 has SwiGLU
-  with a `2*ffn` fc1 -- but "buys H3 little" was wrong, and a SwiGLU
-  variant has a real motivation on the only model we target.
+- **`sage_ffn`'s parking rests on a share that flips with clip length.**
+  Attention is 57% of a DiT block at the 345-frame ceiling but only 36%
+  at 124 frames, where the MLP is the larger share; attention is O(S^2)
+  and the MLP O(S) (`docs/h3_workload_profile.md`). So "H3's time is
+  almost entirely attention" holds at long clips and fails at short
+  ones, and nobody checked which lengths dominate real use before
+  ranking the FFN line at zero. The MLP's fc1 is the largest single
+  transient at both lengths. `sage_ffn` still does not drop in -- GELU
+  versus SwiGLU with a `2*ffn` fc1.
 - Flux / Z-Image are bench shapes, not targets.
 - Other archs fall back to the sm89 kernel and are not tested. No
   Hopper/Blackwell kernels (removed v0.5.0). Linux + source build only.
