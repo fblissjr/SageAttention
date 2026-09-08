@@ -54,6 +54,17 @@ What produced these findings, so it can be repeated:
 4. **Check the caller you are about to accuse.** See A1: the first
    version of that finding was wrong in a way that would have sent
    someone to "fix" correct code.
+5. **A mutation can mask itself.** Found while proving a new check could
+   fail: the check compares a value against the checkout's own VCS
+   state, and the obvious way to break it -- editing the source file --
+   makes a tracked file modified, which moves *both* sides of the
+   comparison and turns the mutation invisible. It passed, and passing
+   there means nothing either way. The fix is to make the mutation
+   without dirtying the tree: a detached worktree, the mutation
+   committed inside it, then the condition staged there. Generalises to
+   anything that reads the state its own edit changes -- if the mutation
+   perturbs the oracle, a green result is uninformative rather than
+   reassuring.
 
 ## Findings A: claims that had gone false
 
