@@ -91,7 +91,8 @@ additions (we own the contract).
 - `sageattention.fused_rope_split` -- **REMOVED 2026-09-08** (shipped
   v0.5.3). A clean-room Triton split-RoPE primitive for LTX. It was
   built on a "only structural kernel-side gap" finding that the
-  consumer then retracted after measuring RoPE at 0.55% of GPU time,
+  consumer then retracted after measuring RoPE's share of GPU time and
+  finding it negligible (CHANGELOG v0.5.3 and the removal entry),
   and it was kept on the argument that it might serve a future DiT
   consumer. That argument expired: ComfyUI now routes this operation
   through `comfy_kitchen` on **both** tracked models -- LTX via
@@ -132,9 +133,9 @@ additions (we own the contract).
   `sageattention/triton/fused_mlp_fp8.py`. Hardcoded 8-config
   `@triton.autotune` per kernel (winners curated from a 126-config
   full sweep). **Status: ships as a completeness primitive, not a
-  perf win.** Synthetic-bench shows 1.26-1.36x vs torch's
+  perf win.** A synthetic bench shows it faster than torch's
   fp8-dequant reference; in-pipeline A/B on a two-sampler LTX
-  FML2V workflow came back +1.79% e2e slower (+20% per-call at
+  FML2V workflow came back slower end to end, and worse per call at
   stage-2). Root cause is L2 contention with neighboring attention
   modules + cumulative kernel-launch overhead at LTX's
   ~1000-FFN-calls/render count. The qualitative wedge holds (no

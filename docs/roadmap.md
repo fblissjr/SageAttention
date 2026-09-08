@@ -137,11 +137,11 @@ confirmed as fp8 or bf16 from the checkpoint audit.
 as a single fused-three-stage kernel with persistent CTAs. CTAs
 hold M-tile state in registers / L2 across the gate + up + down
 pipeline (or across attention's QK + softmax + PV), reducing the
-L2 thrash that the v0.6 walk-back identified as the root cause of
-the +1.79% e2e regression at the canonical workload.
+L2 thrash that the v0.6 walk-back identified as the root cause of the
+e2e regression at the canonical workload (CHANGELOG v0.6.0).
 
-**Why:** directly addresses the v0.6 e2e gap that synthetic bench
-projected (1.26-1.36x) but production refused to follow (-1.79%).
+**Why:** directly addresses the v0.6 e2e gap, where a synthetic bench
+projected a win and production went the other way (CHANGELOG v0.6.0).
 Without persistent-CTA, sage_ffn ships as "completeness primitive"
 indefinitely.
 
@@ -174,10 +174,10 @@ isn't worth the additional cost over the Triton-shaped version.
 
 **Trigger refined 2026-05-19 (Cell C verdict confirmed):** the
 v0.6 e2e gap is NOT closable via consumer-side `prior_forward`
-chaining alone. The re-baseline render landed with TREATMENT at
-+0.75% wall (188.3s vs 185.7s, within ±3s noise) AND with sage_ffn
-*per-kernel* at 22% slower (stage-1) / 5% slower (stage-2) vs
-production stock fp8. Synthetic 1.39x/1.60x advantage at the same
+chaining alone. The re-baseline render landed with TREATMENT slightly
+slower on wall time but inside run-to-run noise, AND with sage_ffn
+*per-kernel* slower at both stages against
+production stock fp8, despite a clear synthetic advantage at the same
 shapes did not transfer; production has the sign flipped. Two open
 hypotheses for the inversion documented in CHANGELOG Decision log:
 
@@ -192,8 +192,8 @@ CHANGELOG (was conditional; now confirmed).
 
 Alternative attack vector worth considering before committing to
 the 2-3 week kernel-day spend: §6.1 (concurrent-dispatch consumer
-wrapper, ~5-13% e2e prize untapped per the v0.6.1 stream-safety
-fix). If concurrent-dispatch ships first and closes the e2e gap by
+wrapper, a single-digit-percent e2e prize untapped per the v0.6.1
+stream-safety fix; figures in that entry). If concurrent-dispatch ships first and closes the e2e gap by
 launching attention + FFN streams concurrently, persistent-CTA's
 priority drops back to "validates the technique" rather than
 "closes the gap."
@@ -238,8 +238,10 @@ cold-render autotune sweeps entirely. Generalize across all sage
 kernels + sage_ffn + any future kernels (the discipline rule from
 CLAUDE.md's "Triton kernel-day discipline" section, productized).
 
-**Why:** cold-render UX on user hardware is bad (~100-500 ms per
-new shape × ~30 unique LTX shapes = ~10 s of first-render lag).
+**Why:** cold-render UX on user hardware is bad -- a per-shape Triton
+autotune search, multiplied by the number of unique LTX shapes, adds up
+to seconds of first-render lag; the per-shape cost is in CHANGELOG
+v0.6.0.
 Pre-baking eliminates this. Independent of any kernel speedup.
 
 **Technical shape:** capture autotune cache via `kernel.cache.items()`
@@ -292,7 +294,7 @@ the two template instantiations.
 **Why:** two specific data points motivate this. (a) A cross-clone
 trace observation (CHANGELOG "Workload intel") of a two-pass tensor-
 loop workflow shows 1536 HEAD-128 + 384 HEAD-64 dispatches per
-render. (b) An attention-kernel slowdown of 2.14x at a 3% seq-length
+render. (b) A large attention-kernel slowdown at a marginal seq-length
 increase in the same trace surfaced direct evidence of autotune
 flipping under interleaved dispatch (Cell C hypothesis 2,
 corroborated). Without HEAD-64 bench rows we cannot pre-bake the

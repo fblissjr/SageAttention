@@ -100,8 +100,9 @@ only after the fact:
   Written without that step the file is green against a kernel already
   proven broken.
 - **Prior arm's allocator state.** The peak-HBM rule below.
-- **Neighboring modules' L2 footprint.** v0.6 sage_ffn benched 1.26-1.36x
-  in isolation and came back +1.79% e2e slower. The synthetic harness
+- **Neighboring modules' L2 footprint.** v0.6 sage_ffn benched faster in
+  isolation and came back slower e2e (CHANGELOG v0.6.0). The synthetic
+  harness
   could not see cache contention by construction, not by oversight.
 - **Position in time within a render.** The Sol-Attn quality gate compared
   four still frames per arm and signed off; the failure it missed is a
@@ -123,7 +124,7 @@ cumulative arm with a per-call-reset arm that does
 pytorch caching allocator into a state that biases the cumulative
 number downward. Caught 2026-05-13 by /simplify in
 `tests/bench/partitioned_mask_phase0/`; the pre-fix bench
-underreported the K-quant+V-cast redundancy delta by ~535 MiB and
+underreported the K-quant+V-cast redundancy delta by a wide margin and
 nearly shipped wrong numbers to a downstream consumer. Symptom:
 cumulative-with-mask and cumulative-no-mask measurements that look
 identical at a shape where they shouldn't.

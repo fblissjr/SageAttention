@@ -63,10 +63,11 @@ the one that was loaded and the one to follow -- then fix this file.
   ship-first-validate-later.
   Two precedents: v0.5.5 chunk-bypass A/B (synthetic mask-kernel win
   softened once `LTXVChunkFeedForward` was shown to be doing the
-  load-bearing memory work) and v0.6 sage_ffn (synthetic 1.26-1.36x
-  came back +1.79% e2e slower on a two-sampler LTX FML2V workflow
-  due to L2 contention + cumulative launch overhead). Especially
-  load-bearing for per-call-heavy primitives (FFN/MLP fire ~1000
+  load-bearing memory work) and v0.6 sage_ffn (a synthetic win came
+  back slower end to end on a two-sampler LTX FML2V workflow, due to L2
+  contention plus cumulative launch overhead; figures in CHANGELOG
+  v0.6.0). Especially load-bearing for per-call-heavy primitives, since
+  an LTX render fires on the order of a thousand FFN/MLP calls
   times per LTX render -- any per-call overhead compounds and any
   cache-locality assumption made under isolation can break).
 

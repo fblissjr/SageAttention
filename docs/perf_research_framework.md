@@ -317,7 +317,8 @@ extra kernel cost.
 
 For comparing across sessions (after a torch / triton / CUDA / driver
 bump, or after a cold boot), use the **`torch_flash / sage_fp8++`
-ratio** instead of absolute time (today: 2.66x at the v0.4.1 primary
+ratio** instead of absolute time (the current value lives in
+`tests/regression_baselines.json`, at the v0.4.1 primary
 shape). The ratio normalizes against driver-thermal drift, which is
 on the order of 1-2% across cold boots even with no code changes --
 see CHANGELOG's cu128->cu130 transition note. If absolute fp8++ time
@@ -387,7 +388,8 @@ research hour. Five patterns to look for:
    Move up the stack: torch.compile around sage, fusion with
    adjacent ops, model-side activation reformulation.
 3. **Speedup-ratio degradation tells you which torch path got
-   better.** If `torch_flash / sage_fp8++` drops from 2.66x to 1.8x
+   better.** If `torch_flash / sage_fp8++` drops materially below its
+   baseline
    on a future torch release, torch closed gap somewhere -- check
    the `torch_flash`, `torch_eff`, `torch_cudnn` row that improved
    most and figure out what changed. That's where fp8++ is leaving

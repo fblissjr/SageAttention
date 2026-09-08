@@ -41,10 +41,11 @@ Sage exposes three surfaces to downstream consumers:
    Triton fp8 MLP (`Linear(fp8) -> GELU(tanh) -> Linear(fp8)`)
    targeting LTX 2.3-class FFN blocks (hidden=4096, inner=16384,
    per-tensor fp8 E4M3FN weights, optional bf16 biases on both
-   Linear layers). Synthetic bench shows 1.26-1.36x vs torch's
-   fp8-dequant reference; **in-pipeline A/B on a two-sampler LTX
-   workflow came back +1.79% e2e slower (+20% per-call at stage-2)**,
-   so this ships as a completeness primitive, not a perf win. Root
+   Linear layers). A synthetic bench shows it faster than torch's
+   fp8-dequant reference; **an in-pipeline A/B on a two-sampler LTX
+   workflow came back slower end to end, and worse per call at
+   stage-2** (CHANGELOG v0.6.0), so this ships as a completeness
+   primitive, not a perf win. Root
    cause is L2 cache contention with neighboring attention modules
    + cumulative kernel-launch overhead at LTX's ~1000-FFN-calls/render
    count. Not wired into `sageattn()`; consumer imports it directly
@@ -64,15 +65,15 @@ Sage exposes three surfaces to downstream consumers:
    of the call, which is the retention this entry point exists to avoid.
    Same signature otherwise; output bit-identical. **What it saves is
    configuration-dependent, and in the arrangement DiT blocks actually
-   use it currently saves nothing** -- measured at fl2va, peak per call:
-   separate allocations -858 MiB at `smooth_k=False` but only -287 at
-   the shipped `smooth_k=True` (`per_thread_int8` allocates the int8
-   outputs before evaluating `k = k - km`, so a full bf16 K copy lands
-   on top); fused QKV views **0 MiB either way**, because releasing q
-   and k frees nothing while v holds the same allocation, and by the
-   time v goes `per_channel_fp8`'s bf16 transpose buffer has set a
-   higher peak. The earlier "~435 MiB in the fused case" figure was
-   wrong; corrected in CHANGELOG v0.7.3. Making the fused case pay
+   use it currently saves nothing** -- measured at fl2va, peak per call.
+   Separate allocations save substantially at `smooth_k=False` and much
+   less at the shipped `smooth_k=True`, because `per_thread_int8`
+   allocates the int8 outputs before evaluating `k = k - km`, so a full
+   bf16 K copy lands on top. Fused QKV views save **nothing either
+   way**: releasing q and k frees nothing while v holds the same
+   allocation, and by the time v goes, `per_channel_fp8`'s bf16
+   transpose buffer has set a higher peak. Figures and the retraction of
+   an earlier wrong number for the fused case are in CHANGELOG v0.7.3. Making the fused case pay
    *from in here* needs the transpose buffer dropped **and** the
    mean-subtraction done in place -- either alone leaves the other
    setting the floor. Only the sm89 fp8 path releases early; other
@@ -80,11 +81,11 @@ Sage exposes three surfaces to downstream consumers:
 5. **`sageattn_consume_prefers_cloned_v(device)`** (v0.7.4) -- the
    caller-side way out of that fused case, and the answer to "should I
    clone?". A caller that clones v before handing the list over gives
-   it its own storage, so releasing q and k frees the fused buffer:
-   -286 MiB per call at fl2va, for one third of the buffer. Both halves
-   are load-bearing and asymmetric -- cloning without consuming is a
-   flat +572 MiB, and consuming at `smooth_k=True` hands the clone
-   straight back (+286 the wrong way).
+   it its own storage, so releasing q and k frees the fused buffer, for
+   the price of one third of it. Both halves are load-bearing and
+   asymmetric: cloning without consuming is a flat cost of twice that,
+   and consuming at `smooth_k=True` hands the clone straight back --
+   the wrong way. Figures in CHANGELOG v0.7.4.
 
    **ComfyUI did this as of 2026-08-11 and does NOT any more -- re-read
    2026-09-08.** `comfy/ldm/minimax/model.py` now builds q/k/v as
