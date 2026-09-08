@@ -401,21 +401,55 @@ kept on the argument that a future DiT consumer might adopt it -- an
 argument the library's presence in core has now closed. Removed in
 v0.7.14 under the Backlog trigger that already existed for it.
 
-**The remaining dig is the rest of that capability set.** The library
-advertises quantisation and normalisation entry points that overlap
-this fork's helpers. Enumerate them against our non-attention exports
-and ask, per primitive: is this something the consumer already gets,
-better placed, from a library it already loads? `sage_ffn` is the next
-one to examine, though it is not a like-for-like duplicate -- no fused
-fp8 MLP appears in that capability set -- so expect the answer there to
-turn on measurement rather than on redundancy.
+**The rest of that capability set, enumerated 2026-09-08 -- and the
+finding is bigger than a helper.** The library exposes 65 public
+callables. Most do not overlap us: its quantisation entry points are
+rowwise/tensorwise for linear layers where ours are the per-warp and
+per-block granularities our own QK kernel's layout requires; its int4 and
+mxfp8/nvfp4 paths are for weight formats we do not handle; its fp8
+storage helpers quantize, where ours *reads* the four conventions a
+consumer already stores. None of those is duplication.
 
-**The principle, since it generalises past this repo:** an overlap that
-only duplicates is not neutral. It is a second thing to keep correct
-across upstream churn, a second place for a claim to go stale, and a
-tempting comparand that flatters whichever side was tuned more
-recently. Attention is where this fork's leverage is; helpers that a
-first-party library does in-place at the call site are not.
+**But it ships INT8 attention, and it runs on our arch.**
+`int8_attention` computes inference SDPA with signed INT8 Q/K/V and
+unsigned INT8 P, in the same `[batch, heads, sequence, head_dim]` layout
+we take, with mask support, grouped-query support, and head dims padded
+to 64/128/256 tiles. `int8_attention_is_available()` returns True on this
+box. It also ships `prequantize_int8_attention` /
+`int8_attention_from_prequantized`, which is the same idea as our
+`sageattn_consume`: quantize without allocating the output, do not retain
+the float inputs so the caller can free them, preserve stream ordering.
+
+That is not a helper overlapping a helper. That is the fork's core
+function, and the consume pattern we built, available from a library the
+consumer already loads.
+
+**Two differences that mean this is a question and not a verdict.** Ours
+is INT8 QK with **fp8** PV; theirs is INT8 throughout, including P and V.
+Different precision profile, and our own record is explicit that 8-bit
+versus 16-bit PV is where the accuracy difference lives -- so int8 PV is
+a third point on that axis and nobody has measured it. And theirs applies
+a fused block-Hadamard rotation to Q and K before quantizing, which is a
+stronger outlier treatment than our `smooth_k` and a technique this fork
+does not implement at all.
+
+**Status: unmeasured, deliberately.** A first speed and VRAM comparison
+was attempted and discarded -- the GPU was already at 93% utilisation
+running someone else's capture bench, and this fork's own number came
+back roughly twice its known value, so both arms were contaminated. The
+comparison needs an idle card. When it runs: speed and peak VRAM are
+valid on synthetic input, and **accuracy is not** -- both implementations
+are approximations of exact attention, so a `randn` comparison is
+misleading in the pessimistic direction for both, and the real-activation
+harness is the only instrument that answers it.
+
+**Why this matters more than the rope helper did.** If that kernel
+matches or beats ours at H3 shapes on speed and holds up on real
+activations, the honest conclusion is that this fork's attention work has
+been overtaken on its own ground, and the question becomes what is left
+that is ours. If it does not, we learn what our fp8 PV path is actually
+worth against a serious comparand, which is a number this repo has never
+had. Either outcome is worth more than most of the queued work.
 
 **D2. That library is also the binding model worth copying.** It carries
 no framework symbols in its dynamic dependencies and registers its ops
